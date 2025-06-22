@@ -6,6 +6,7 @@ use syntect::{
     easy::HighlightLines, highlighting::Theme, parsing::SyntaxSet, util::LinesWithEndings,
 };
 
+#[allow(dead_code)]
 pub fn highlight_sql(
     text: &str,
     ps: &SyntaxSet,

@@ -11,6 +11,7 @@ pub mod theme {
     pub const COLOR_HIGHLIGHT_BG: Color = Color::Rgb(137, 220, 235);
     pub const COLOR_HIGHLIGHT_FG: Color = Color::Black;
     pub const COLOR_BLACK: Color = Color::Black;
+    pub const COLOR_WHITE: Color = Color::White;
 }
 
 pub trait StyleProvider {

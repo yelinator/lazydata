@@ -1,7 +1,9 @@
 mod app;
+mod command;
 mod components;
 mod crud;
 mod database;
+mod key_maps;
 mod layout;
 mod state;
 mod style;
