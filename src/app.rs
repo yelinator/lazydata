@@ -202,19 +202,23 @@ impl App<'_> {
         Ok(())
     }
 
+    fn draw_once(&mut self, terminal: &mut DefaultTerminal) {
+        let _ = terminal.draw(|f| self.render_ui(f));
+    }
+
     pub async fn run(&mut self, mut terminal: DefaultTerminal) -> Result<()> {
         while !self.exit {
             terminal.draw(|f| self.render_ui(f))?;
-            let _ = self.handle_events().await;
+            let _ = self.handle_events(&mut terminal).await;
         }
         Ok(())
     }
 
-    async fn handle_events(&mut self) -> Result<()> {
+    async fn handle_events(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key_event) = event::read()? {
                 if let Some(command) = self.key_mapper.map_key_to_command(key_event, &self.focus) {
-                    self.handle_command(command).await?;
+                    self.handle_command(command, terminal).await?;
                     self.query_editor.mode = self.key_mapper.editor_mode();
                 }
             }
@@ -222,7 +226,11 @@ impl App<'_> {
         Ok(())
     }
 
-    async fn handle_command(&mut self, command: Command) -> Result<()> {
+    async fn handle_command(
+        &mut self,
+        command: Command,
+        terminal: &mut DefaultTerminal,
+    ) -> Result<()> {
         match command {
             // Global Commands
             Command::Quit => {
@@ -236,27 +244,48 @@ impl App<'_> {
                 if !query.is_empty() {
                     self.query = query.clone();
 
+                    self.data_table.start_loading();
+                    self.draw_once(terminal);
+
                     if let Some(pool) = &self.pool {
                         match execute_query(pool, &query).await {
                             Ok(ExecutionResult::Data(data, DataMeta { rows: _, message })) => {
-                                self.data_table =
-                                    DataTable::new(data.headers.clone(), data.rows.clone());
+                                let elapsed_duration = if let Some(stats) = get_query_stats().await
+                                {
+                                    stats.elapsed
+                                } else {
+                                    Duration::ZERO
+                                };
+                                self.data_table.finish_loading(
+                                    data.headers,
+                                    data.rows,
+                                    elapsed_duration,
+                                );
                                 self.data_table.status_message = Some(message);
-                                if let Some(stats) = get_query_stats().await {
-                                    self.data_table.elapsed = stats.elapsed
-                                }
                             }
                             Ok(ExecutionResult::Affected { rows: _, message }) => {
+                                let elapsed_duration = if let Some(stats) = get_query_stats().await
+                                {
+                                    stats.elapsed
+                                } else {
+                                    Duration::ZERO
+                                };
+                                self.data_table.finish_loading(
+                                    Vec::new(),
+                                    Vec::new(),
+                                    elapsed_duration,
+                                );
                                 self.data_table.status_message = Some(message);
-                                if let Some(stats) = get_query_stats().await {
-                                    self.data_table.elapsed = stats.elapsed
-                                }
                             }
                             Err(err) => {
-                                self.data_table.tabs.set_index(1);
-                                self.data_table.status_message = Some(format!("❌ Error: {}", err));
+                                self.data_table
+                                    .set_error_state(format!("❌ Error: {}", err));
                             }
                         }
+                    } else {
+                        // Handle the case where the pool is not available (e.g., not connected to a DB)
+                        self.data_table
+                            .set_error_state("Database connection pool not available.".to_string());
                     }
                 }
             }

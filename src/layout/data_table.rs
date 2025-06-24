@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::palette::tailwind;
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
@@ -136,6 +136,13 @@ pub struct DataTable<'a> {
     pub elapsed: Duration,
     page_size: usize,
     pub current_page: usize,
+    pub loading_state: LoadingState,
+}
+
+pub enum LoadingState {
+    Idle,
+    Loading,
+    Error(String),
 }
 
 impl<'a> DataTable<'a> {
@@ -166,6 +173,7 @@ impl<'a> DataTable<'a> {
             elapsed: Duration::ZERO,
             page_size: 100,
             current_page: 0,
+            loading_state: LoadingState::Idle,
         }
     }
 
@@ -421,7 +429,9 @@ impl<'a> DataTable<'a> {
             .border_style(style.border_style(Focus::Table))
             .style(style.block_style());
 
-        Paragraph::new(title).block(title_block)
+        Paragraph::new(Text::from(title))
+            .block(title_block)
+            .alignment(Alignment::Center)
     }
 
     fn create_padded_cell_text(content: &str) -> Text<'_> {
@@ -473,13 +483,28 @@ impl<'a> DataTable<'a> {
         match self.tabs.index {
             0 => {
                 self.set_colors();
-                if self.is_empty() {
-                    let message = "No data output. Execute a query to get output";
-                    let status_widget = self.build_status_paragraph(message, &app_style);
-                    frame.render_widget(status_widget, content_area);
-                } else {
-                    self.render_table(frame, content_area, current_focus); // current_focus still passed for render_table's internal style
-                    self.render_scrollbar(frame, content_area);
+
+                match self.loading_state {
+                    LoadingState::Idle => {
+                        if self.is_empty() {
+                            let message = "No data output. Execute a query to get output";
+                            let status_widget = self.build_status_paragraph(message, &app_style);
+                            frame.render_widget(status_widget, content_area);
+                        } else {
+                            self.render_table(frame, content_area, current_focus);
+                            self.render_scrollbar(frame, content_area);
+                        }
+                    }
+                    LoadingState::Loading => {
+                        let loading_widget =
+                            self.build_status_paragraph("Loading data...", &app_style);
+                        frame.render_widget(loading_widget, content_area);
+                    }
+                    LoadingState::Error(ref err_msg) => {
+                        let error_message = format!("Error loading data: {}", err_msg);
+                        let error_widget = self.build_status_paragraph(&error_message, &app_style);
+                        frame.render_widget(error_widget, content_area);
+                    }
                 }
             }
             1 => {
@@ -505,20 +530,19 @@ impl<'a> DataTable<'a> {
     }
 
     fn render_table(&mut self, frame: &mut Frame, area: Rect, current_focus: &Focus) {
-        // Optimization: Create DefaultStyle once for this `render_table` call
         let table_widget_style = DefaultStyle {
             focus: current_focus.clone(),
         };
 
-        // Extract all needed fields from self before any borrows
         let colors = &self.colors;
         let horizontal_scroll = self.horizontal_scroll;
         let page_size = self.page_size;
         let current_page = self.current_page;
         let item_height = ITEM_HEIGHT;
-        let data_column_widths = self.data.column_widths().to_vec();
-        let data_headers = self.data.headers().to_vec();
-        let get_current_page_rows = self.get_current_page_rows().to_vec();
+        let data_column_widths = self.data.column_widths();
+        let data_headers = self.data.headers();
+
+        let owned_current_page_rows: Vec<Vec<String>> = self.get_current_page_rows().to_vec();
 
         let header_style = Style::default().fg(colors.header_fg).bg(colors.header_bg);
         let selected_row_style = Style::default()
@@ -531,50 +555,50 @@ impl<'a> DataTable<'a> {
 
         let numbering_col_width = 4;
         let mut visible_columns = 0;
-        let mut total_width = numbering_col_width;
+        let mut total_width_of_visible_data_columns = 0;
         let available_width = area.width.saturating_sub(1);
 
-        for width in data_column_widths.iter().skip(horizontal_scroll) {
-            if total_width + width > available_width {
+        for &width in data_column_widths.iter().skip(horizontal_scroll) {
+            if numbering_col_width + total_width_of_visible_data_columns + width > available_width {
                 break;
             }
-            total_width += width;
+            total_width_of_visible_data_columns += width;
             visible_columns += 1;
         }
 
-        let mut adjusted_widths = vec![Constraint::Length(numbering_col_width)]; // Directly use Constraint
-        let mut remaining_width = available_width.saturating_sub(numbering_col_width);
+        let mut adjusted_widths = Vec::with_capacity(visible_columns + 1);
+        adjusted_widths.push(Constraint::Length(numbering_col_width));
+
+        let mut remaining_width_for_data_cols = available_width.saturating_sub(numbering_col_width);
 
         for &width in data_column_widths
             .iter()
             .skip(horizontal_scroll)
             .take(visible_columns)
         {
-            if remaining_width >= width {
-                adjusted_widths.push(Constraint::Length(width)); // Directly use Constraint
-                remaining_width -= width;
+            if remaining_width_for_data_cols >= width {
+                adjusted_widths.push(Constraint::Length(width));
+                remaining_width_for_data_cols -= width;
             } else {
-                adjusted_widths.push(Constraint::Length(remaining_width)); // Directly use Constraint
+                adjusted_widths.push(Constraint::Length(remaining_width_for_data_cols));
                 break;
             }
         }
 
-        let visible_headers: Vec<_> = data_headers
+        let visible_headers: Vec<&str> = data_headers
             .iter()
             .skip(horizontal_scroll)
             .take(visible_columns)
-            .cloned()
+            .map(|s| s.as_str())
             .collect();
 
-        // Optimization: Create header `Row`
         let header = std::iter::once(Cell::from("#"))
-            .chain(visible_headers.iter().map(|h| Cell::from(h.clone())))
+            .chain(visible_headers.into_iter().map(Cell::from))
             .collect::<Row>()
             .style(header_style)
             .height(1);
 
-        // Modified: Iterate over current page rows
-        let rows = get_current_page_rows.iter().enumerate().map(|(i, row)| {
+        let rows = owned_current_page_rows.iter().enumerate().map(|(i, row)| {
             let color = if i % 2 == 0 {
                 colors.normal_row_color
             } else {
@@ -607,8 +631,8 @@ impl<'a> DataTable<'a> {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(table_widget_style.border_style(Focus::Table)) // Use optimized style
-                    .style(table_widget_style.block_style()), // Use optimized style
+                    .border_style(table_widget_style.border_style(Focus::Table))
+                    .style(table_widget_style.block_style()),
             );
 
         frame.render_stateful_widget(t, area, &mut self.state);
@@ -647,5 +671,47 @@ impl<'a> DataTable<'a> {
             }),
             &mut self.horizontal_scroll_state,
         );
+    }
+
+    pub fn start_loading(&mut self) {
+        self.tabs.set_index(0);
+        self.loading_state = LoadingState::Loading;
+    }
+
+    pub fn finish_loading(
+        &mut self,
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+        elapsed: Duration,
+    ) {
+        self.data = DynamicData::from_query_results(headers, rows);
+        self.elapsed = elapsed;
+        self.loading_state = LoadingState::Idle;
+        self.status_message = Some(format!("Query complete in {} ms.", elapsed.as_millis()));
+
+        self.state =
+            TableState::default().with_selected(if self.data.is_empty() { None } else { Some(0) });
+        self.vertical_scroll_state =
+            ScrollbarState::new((self.data.rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT);
+        self.horizontal_scroll_state = ScrollbarState::new(
+            self.data
+                .column_widths
+                .iter()
+                .sum::<u16>()
+                .saturating_sub(1) as usize,
+        );
+        self.current_page = 0;
+
+        if self.data.is_empty() {
+            self.tabs.set_index(1);
+        } else {
+            self.tabs.set_index(0);
+        }
+    }
+
+    pub fn set_error_state(&mut self, message: String) {
+        self.loading_state = LoadingState::Error(message.clone());
+        self.status_message = Some(format!("Error: {}", message));
+        self.tabs.set_index(1);
     }
 }
