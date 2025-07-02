@@ -13,10 +13,10 @@ use crate::state::get_query_stats;
 use color_eyre::eyre::Result;
 use crossterm::execute;
 use crossterm::{
+    ExecutableCommand, cursor,
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent},
     style::Print,
     terminal::{Clear, ClearType},
-    ExecutableCommand, cursor,
 };
 use inquire::Select;
 use ratatui::{
@@ -248,18 +248,19 @@ impl App<'_> {
 
                     if let Some(pool) = &self.pool {
                         match execute_query(pool, &query).await {
-                            Ok(ExecutionResult::Data { headers, rows, meta: DataMeta { rows: _, message } }) => {
+                            Ok(ExecutionResult::Data {
+                                headers,
+                                rows,
+                                meta: DataMeta { rows: _, message },
+                            }) => {
                                 let elapsed_duration = if let Some(stats) = get_query_stats().await
                                 {
                                     stats.elapsed
                                 } else {
                                     Duration::ZERO
                                 };
-                                self.data_table.finish_loading(
-                                    headers,
-                                    rows,
-                                    elapsed_duration,
-                                );
+                                self.data_table
+                                    .finish_loading(headers, rows, elapsed_duration);
                                 self.data_table.status_message = Some(message);
                             }
                             Ok(ExecutionResult::Affected { rows: _, message }) => {

@@ -9,22 +9,12 @@ use ratatui::style::palette::tailwind;
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block,
-    Borders,
-    Cell,
-    HighlightSpacing,
-    Paragraph,
-    Row,
-    Scrollbar,
-    ScrollbarOrientation,
-    ScrollbarState,
-    Table,
-    TableState,
-    Tabs,
+    Block, Borders, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Table, TableState, Tabs,
 };
-use ratatui::{symbols, Frame};
+use ratatui::{Frame, symbols};
 use serde_json::Value;
-use sqlx::{postgres::PgRow, Row as SqlxRow, types::Json};
+use sqlx::{Row as SqlxRow, postgres::PgRow, types::Json};
 use std::collections::HashMap;
 use std::time::Duration;
 use unicode_width::UnicodeWidthStr;
@@ -101,7 +91,11 @@ impl<'a> DataTable<'a> {
         let (column_widths, min_column_widths) = Self::calculate_column_widths(&headers, &rows);
 
         Self {
-            state: TableState::default().with_selected(if rows.is_empty() { None } else { Some(0) }),
+            state: TableState::default().with_selected(if rows.is_empty() {
+                None
+            } else {
+                Some(0)
+            }),
             vertical_scroll_state: ScrollbarState::new(
                 (rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT,
             ),
@@ -135,10 +129,7 @@ impl<'a> DataTable<'a> {
             }
         }
 
-        let final_widths: Vec<u16> = widths
-            .iter()
-            .map(|&w| w.saturating_add(2).max(3))
-            .collect();
+        let final_widths: Vec<u16> = widths.iter().map(|&w| w.saturating_add(2).max(3)).collect();
         (final_widths.clone(), final_widths)
     }
 
@@ -468,7 +459,8 @@ impl<'a> DataTable<'a> {
     pub fn adjust_column_width(&mut self, delta: i16) {
         if let Some(col) = self.state.selected_column() {
             self.column_widths[col] = (self.column_widths[col] as i16 + delta)
-                .max(self.min_column_widths[col] as i16) as u16;
+                .max(self.min_column_widths[col] as i16)
+                as u16;
         }
     }
 
@@ -726,19 +718,15 @@ impl<'a> DataTable<'a> {
         self.loading_state = LoadingState::Loading;
     }
 
-    pub fn finish_loading(
-        &mut self,
-        headers: Vec<String>,
-        rows: Vec<PgRow>,
-        elapsed: Duration,
-    ) {
+    pub fn finish_loading(&mut self, headers: Vec<String>, rows: Vec<PgRow>, elapsed: Duration) {
         self.headers = headers;
         self.rows = rows;
         self.elapsed = elapsed;
         self.loading_state = LoadingState::Idle;
         self.status_message = Some(format!("Query complete in {} ms.", elapsed.as_millis()));
 
-        let (column_widths, min_column_widths) = Self::calculate_column_widths(&self.headers, &self.rows);
+        let (column_widths, min_column_widths) =
+            Self::calculate_column_widths(&self.headers, &self.rows);
         self.column_widths = column_widths;
         self.min_column_widths = min_column_widths;
 
@@ -746,12 +734,8 @@ impl<'a> DataTable<'a> {
             TableState::default().with_selected(if self.is_empty() { None } else { Some(0) });
         self.vertical_scroll_state =
             ScrollbarState::new((self.rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT);
-        self.horizontal_scroll_state = ScrollbarState::new(
-            self.column_widths
-                .iter()
-                .sum::<u16>()
-                .saturating_sub(1) as usize,
-        );
+        self.horizontal_scroll_state =
+            ScrollbarState::new(self.column_widths.iter().sum::<u16>().saturating_sub(1) as usize);
         self.current_page = 0;
 
         if self.is_empty() {

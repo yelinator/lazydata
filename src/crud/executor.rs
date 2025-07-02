@@ -16,8 +16,15 @@ pub struct DataMeta {
 
 #[allow(dead_code)]
 pub enum ExecutionResult {
-    Affected { rows: usize, message: String },
-    Data { headers: Vec<String>, rows: Vec<sqlx::postgres::PgRow>, meta: DataMeta },
+    Affected {
+        rows: usize,
+        message: String,
+    },
+    Data {
+        headers: Vec<String>,
+        rows: Vec<sqlx::postgres::PgRow>,
+        meta: DataMeta,
+    },
 }
 
 #[async_trait]
@@ -81,7 +88,11 @@ pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, 
             );
 
             let headers = if let Some(first_row) = rows.first() {
-                first_row.columns().iter().map(|c| c.name().to_string()).collect()
+                first_row
+                    .columns()
+                    .iter()
+                    .map(|c| c.name().to_string())
+                    .collect()
             } else {
                 Vec::new()
             };

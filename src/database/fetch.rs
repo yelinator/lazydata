@@ -1,5 +1,3 @@
-
-
 use super::pool::DbPool;
 use color_eyre::eyre::Result;
 use futures::future::try_join_all;
@@ -21,7 +19,6 @@ pub struct TableMetadata {
     pub row_count: i64,
     pub estimated_size: String,
     pub table_type: String,
-    
 }
 
 #[allow(dead_code)]
@@ -99,7 +96,7 @@ impl MetadataFetcher for PgPool {
                     row_count,
                     estimated_size,
                     table_type,
-                    })
+                })
             }
         });
 

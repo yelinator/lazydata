@@ -3,10 +3,10 @@ use crate::command::Command;
 use crate::style::{DefaultStyle, StyleProvider};
 use color_eyre::eyre::Result;
 use crossterm::event::KeyEvent;
+use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
-use ratatui::Frame;
 use std::fmt;
 use tui_textarea::{Input, TextArea};
 
@@ -67,11 +67,7 @@ pub struct QueryEditor {
 impl QueryEditor {
     pub fn new() -> Self {
         let mut textarea = TextArea::default();
-        textarea.set_block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("SQL Editor"),
-        );
+        textarea.set_block(Block::default().borders(Borders::ALL).title("SQL Editor"));
         Self {
             mode: Mode::Normal,
             textarea,
