@@ -7,18 +7,16 @@ use crate::database::{
     fetch::fetch_all_table_metadata,
     pool::pool,
 };
-use crate::layout::query_editor::{Mode, QueryEditor};
+use crate::layout::query_editor::QueryEditor;
 use crate::layout::{data_table::DataTable, sidebar::SideBar};
 use crate::state::get_query_stats;
 use color_eyre::eyre::Result;
 use crossterm::execute;
 use crossterm::{
-    ExecutableCommand, cursor,
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    },
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyEvent},
     style::Print,
     terminal::{Clear, ClearType},
+    ExecutableCommand, cursor,
 };
 use inquire::Select;
 use ratatui::{
@@ -36,7 +34,7 @@ use std::sync::{
 use std::{io::stdout, time::Duration};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
-use tui_textarea::Input;
+
 use tui_tree_widget::TreeItem;
 
 use crate::command::Command;
@@ -218,7 +216,7 @@ impl App<'_> {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key_event) = event::read()? {
                 if let Some(command) = self.key_mapper.map_key_to_command(key_event, &self.focus) {
-                    self.handle_command(command, terminal).await?;
+                    self.handle_command(command, key_event, terminal).await?;
                     self.query_editor.mode = self.key_mapper.editor_mode();
                 }
             }
@@ -229,6 +227,7 @@ impl App<'_> {
     async fn handle_command(
         &mut self,
         command: Command,
+        key_event: KeyEvent,
         terminal: &mut DefaultTerminal,
     ) -> Result<()> {
         match command {
@@ -249,7 +248,7 @@ impl App<'_> {
 
                     if let Some(pool) = &self.pool {
                         match execute_query(pool, &query).await {
-                            Ok(ExecutionResult::Data(data, DataMeta { rows: _, message })) => {
+                            Ok(ExecutionResult::Data { headers, rows, meta: DataMeta { rows: _, message } }) => {
                                 let elapsed_duration = if let Some(stats) = get_query_stats().await
                                 {
                                     stats.elapsed
@@ -257,8 +256,8 @@ impl App<'_> {
                                     Duration::ZERO
                                 };
                                 self.data_table.finish_loading(
-                                    data.headers,
-                                    data.rows,
+                                    headers,
+                                    rows,
                                     elapsed_duration,
                                 );
                                 self.data_table.status_message = Some(message);
@@ -290,131 +289,60 @@ impl App<'_> {
                 }
             }
 
-            // Data Table Commands
-            Command::DataTablePreviousTab => self.data_table.tabs.previous(),
-            Command::DataTableNextTab => self.data_table.tabs.next(),
-            Command::DataTableNextRow => self.data_table.next_row(),
-            Command::DataTablePreviousRow => self.data_table.previous_row(),
-            Command::DataTableScrollRight => self.data_table.scroll_right(),
-            Command::DataTableScrollLeft => self.data_table.scroll_left(),
-            Command::DataTableNextColor => self.data_table.next_color(),
-            Command::DataTablePreviousColor => self.data_table.previous_color(),
-            Command::DataTableNextPage => self.data_table.next_page(),
-            Command::DataTablePreviousPage => self.data_table.previous_page(),
-            Command::DataTableJumpToFirstRow => self.data_table.jump_to_absolute_row(0),
-            Command::DataTableJumpToLastRow => self
-                .data_table
-                .jump_to_absolute_row(self.data_table.data.len().saturating_sub(1)),
-            Command::DataTableNextColumn => self.data_table.next_column(),
-            Command::DataTablePreviousColumn => self.data_table.previous_column(),
-            Command::DataTableAdjustColumnWidthIncrease => self.data_table.adjust_column_width(1),
-            Command::DataTableAdjustColumnWidthDecrease => self.data_table.adjust_column_width(-1),
-            Command::DataTableCopySelectedCell => {
-                if let Some(content) = self.data_table.copy_selected_cell() {
-                    self.data_table.status_message = Some(format!("Copied: {}", content));
-                }
-            }
-            Command::DataTableCopySelectedRow => {
-                if let Some(content) = self.data_table.copy_selected_row() {
-                    self.data_table.status_message = Some(format!("Copied row: {}", content));
-                }
-            }
-            Command::DataTableSetTabIndex(idx) => {
-                if idx < self.data_table.tabs.titles.len() {
-                    self.data_table.tabs.set_index(idx);
-                }
+            Command::DataTablePreviousTab
+            | Command::DataTableNextTab
+            | Command::DataTableNextRow
+            | Command::DataTablePreviousRow
+            | Command::DataTableScrollRight
+            | Command::DataTableScrollLeft
+            | Command::DataTableNextColor
+            | Command::DataTablePreviousColor
+            | Command::DataTableNextPage
+            | Command::DataTablePreviousPage
+            | Command::DataTableJumpToFirstRow
+            | Command::DataTableJumpToLastRow
+            | Command::DataTableNextColumn
+            | Command::DataTablePreviousColumn
+            | Command::DataTableAdjustColumnWidthIncrease
+            | Command::DataTableAdjustColumnWidthDecrease
+            | Command::DataTableCopySelectedCell
+            | Command::DataTableCopySelectedRow
+            | Command::DataTableSetTabIndex(_) => {
+                self.data_table.handle_command(command);
             }
 
-            // Sidebar Commands
-            Command::SidebarToggleSelected => {
-                self.sidebar.state.toggle_selected();
-            }
-            Command::SidebarKeyLeft => {
-                self.sidebar.state.key_left();
-            }
-            Command::SidebarKeyRight => {
-                self.sidebar.state.key_right();
-            }
-            Command::SidebarKeyDown => {
-                self.sidebar.state.key_down();
-            }
-            Command::SidebarKeyUp => {
-                self.sidebar.state.key_up();
-            }
-            Command::SidebarDeselect => {
-                self.sidebar.state.select(Vec::new());
-            }
-            Command::SidebarSelectFirst => {
-                self.sidebar.state.select_first();
-            }
-            Command::SidebarSelectLast => {
-                self.sidebar.state.select_last();
-            }
-            Command::SidebarScrollDown(amount) => {
-                self.sidebar.state.scroll_down(amount as usize);
-            }
-            Command::SidebarScrollUp(amount) => {
-                self.sidebar.state.scroll_up(amount as usize);
+            Command::SidebarToggleSelected
+            | Command::SidebarKeyLeft
+            | Command::SidebarKeyRight
+            | Command::SidebarKeyDown
+            | Command::SidebarKeyUp
+            | Command::SidebarDeselect
+            | Command::SidebarSelectFirst
+            | Command::SidebarSelectLast
+            | Command::SidebarScrollDown(_)
+            | Command::SidebarScrollUp(_) => {
+                self.sidebar.handle_command(command);
             }
 
-            Command::EditorInputChar(c) => {
-                let key_event = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
-                self.query_editor.input(Input::from(key_event));
-            }
-            Command::EditorInputBackspace => {
-                let key_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
-                self.query_editor.input(Input::from(key_event));
-            }
-            Command::EditorInputDelete => {
-                let key_event = KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE);
-                self.query_editor.input(Input::from(key_event));
-            }
-            Command::EditorInputEnter => {
-                let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-                self.query_editor.input(Input::from(key_event));
-            }
-            Command::EditorMoveCursor(move_action) => {
-                self.query_editor.textarea.move_cursor(move_action);
-            }
-            Command::EditorDeleteLineByEnd => {
-                self.query_editor.textarea.delete_line_by_end();
-            }
-            Command::EditorCancelSelection => {
-                self.query_editor.textarea.cancel_selection();
-            }
-            Command::EditorPaste => {
-                self.query_editor.textarea.paste();
-            }
-            Command::EditorUndo => {
-                self.query_editor.textarea.undo();
-            }
-            Command::EditorRedo => {
-                self.query_editor.textarea.redo();
-            }
-            Command::EditorDeleteNextChar => {
-                self.query_editor.textarea.delete_next_char();
-            }
-            Command::EditorSetMode(mode) => {
-                self.query_editor.mode = mode;
-            }
-            Command::EditorScrollRelative(rows, cols) => {
-                self.query_editor.textarea.scroll((rows, cols));
-            }
-            Command::EditorScroll(scrolling_action) => {
-                self.query_editor.textarea.scroll(scrolling_action);
-            }
-            Command::EditorStartSelection => {
-                self.query_editor.textarea.start_selection();
-            }
-            Command::EditorCopySelection => {
-                self.query_editor.textarea.copy();
-            }
-            Command::EditorCutSelection => {
-                self.query_editor.textarea.cut();
-            }
-            Command::EditorPerformPendingOperator => {
-                self.query_editor.textarea.cancel_selection();
-                self.query_editor.mode = Mode::Normal;
+            Command::EditorInputChar(_)
+            | Command::EditorInputBackspace
+            | Command::EditorInputDelete
+            | Command::EditorInputEnter
+            | Command::EditorMoveCursor(_)
+            | Command::EditorDeleteLineByEnd
+            | Command::EditorCancelSelection
+            | Command::EditorPaste
+            | Command::EditorUndo
+            | Command::EditorRedo
+            | Command::EditorDeleteNextChar
+            | Command::EditorSetMode(_)
+            | Command::EditorScrollRelative(_, _)
+            | Command::EditorScroll(_)
+            | Command::EditorStartSelection
+            | Command::EditorCopySelection
+            | Command::EditorCutSelection
+            | Command::EditorPerformPendingOperator => {
+                self.query_editor.handle_command(command, key_event);
             }
             Command::NoOp => { /* No operation, do nothing */ }
         }

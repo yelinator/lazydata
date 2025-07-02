@@ -1,11 +1,11 @@
 use super::postgres::PostgresExecutor;
 use crate::database::pool::DbPool;
-use crate::layout::data_table::DynamicData;
+
 use crate::state::update_query_stats;
 use crate::utils::query_timer::query_timer;
 use crate::utils::query_type::Query;
 use async_trait::async_trait;
-use sqlx::{Column, Row};
+use sqlx::{Column, Row, postgres::PgRow};
 use std::time::Duration;
 
 #[allow(dead_code)]
@@ -17,7 +17,7 @@ pub struct DataMeta {
 #[allow(dead_code)]
 pub enum ExecutionResult {
     Affected { rows: usize, message: String },
-    Data(DynamicData, DataMeta),
+    Data { headers: Vec<String>, rows: Vec<sqlx::postgres::PgRow>, meta: DataMeta },
 }
 
 #[async_trait]
@@ -28,10 +28,11 @@ pub trait DatabaseExecutor: Send + Sync {
     async fn insert(&self, query: &str) -> Result<u64, sqlx::Error>;
     async fn update(&self, query: &str) -> Result<u64, sqlx::Error>;
     async fn delete(&self, query: &str) -> Result<u64, sqlx::Error>;
+    #[allow(dead_code)]
     fn get_value_as_string(&self, row: &Self::Row, index: usize) -> String;
 }
 
-pub fn create_executor(pool: &DbPool) -> impl DatabaseExecutor {
+pub fn create_executor(pool: &DbPool) -> impl DatabaseExecutor<Row = PgRow> {
     match pool {
         DbPool::Postgres(pg_pool) => PostgresExecutor::new(pg_pool.clone()),
         DbPool::MySQL(_) => todo!(),
@@ -79,20 +80,20 @@ pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, 
                 row_count,
             );
 
-            let (headers, row_data, column_widths) = process_rows(&rows, &executor);
+            let headers = if let Some(first_row) = rows.first() {
+                first_row.columns().iter().map(|c| c.name().to_string()).collect()
+            } else {
+                Vec::new()
+            };
 
-            Ok(ExecutionResult::Data(
-                DynamicData {
-                    headers,
-                    rows: row_data,
-                    column_widths: column_widths.clone(),
-                    min_column_widths: column_widths,
-                },
-                DataMeta {
+            Ok(ExecutionResult::Data {
+                headers,
+                rows,
+                meta: DataMeta {
                     rows: row_count,
                     message,
                 },
-            ))
+            })
         }
 
         Query::INSERT => run_affected_query(executor.insert(sql), "INSERT").await,
@@ -101,37 +102,4 @@ pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, 
 
         Query::UNKNOWN => Err(sqlx::Error::Protocol("Unsupported query".into())),
     }
-}
-
-fn process_rows<R, E>(rows: &[R], executor: &E) -> (Vec<String>, Vec<Vec<String>>, Vec<u16>)
-where
-    R: Row,
-    E: DatabaseExecutor<Row = R>,
-{
-    let mut headers: Vec<String> = Vec::new();
-    let mut column_widths = Vec::new();
-    let mut data_rows = Vec::new();
-
-    if let Some(first_row) = rows.first() {
-        let cols = first_row.columns();
-        headers = cols.iter().map(|c| c.name().to_string()).collect();
-        column_widths = headers.iter().map(|h| h.len() as u16).collect();
-    }
-
-    for row in rows {
-        let mut data_row = Vec::with_capacity(headers.len());
-
-        for (i, col_width) in column_widths.iter_mut().take(headers.len()).enumerate() {
-            let val = executor.get_value_as_string(row, i);
-            let val_len = val.len() as u16;
-
-            if val_len > *col_width {
-                *col_width = val_len;
-            }
-            data_row.push(val);
-        }
-        data_rows.push(data_row);
-    }
-
-    (headers, data_rows, column_widths)
 }

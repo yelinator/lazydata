@@ -1,4 +1,4 @@
-use crate::layout::data_table::DynamicData;
+
 
 use super::pool::DbPool;
 use color_eyre::eyre::Result;
@@ -21,7 +21,7 @@ pub struct TableMetadata {
     pub row_count: i64,
     pub estimated_size: String,
     pub table_type: String,
-    pub table_data: Option<DynamicData>,
+    
 }
 
 #[allow(dead_code)]
@@ -99,8 +99,7 @@ impl MetadataFetcher for PgPool {
                     row_count,
                     estimated_size,
                     table_type,
-                    table_data: None,
-                })
+                    })
             }
         });
 
@@ -151,7 +150,6 @@ impl MetadataFetcher for MySqlPool {
                 row_count,
                 estimated_size,
                 table_type,
-                table_data: None,
             });
         }
         Ok(tables)
@@ -197,7 +195,6 @@ impl MetadataFetcher for SqlitePool {
                 row_count: 0,
                 estimated_size: "N/A".to_string(),
                 table_type: "table".to_string(),
-                table_data: None,
             });
         }
         Ok(tables)

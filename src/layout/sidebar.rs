@@ -1,5 +1,6 @@
 use crate::{
     app::Focus,
+    command::Command,
     style::{DefaultStyle, StyleProvider},
 };
 use ratatui::layout::Rect;
@@ -19,6 +20,42 @@ impl SideBar {
             state: TreeState::default(),
             items,
             focus,
+        }
+    }
+
+    pub fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::SidebarToggleSelected => {
+                self.state.toggle_selected();
+            }
+            Command::SidebarKeyLeft => {
+                self.state.key_left();
+            }
+            Command::SidebarKeyRight => {
+                self.state.key_right();
+            }
+            Command::SidebarKeyDown => {
+                self.state.key_down();
+            }
+            Command::SidebarKeyUp => {
+                self.state.key_up();
+            }
+            Command::SidebarDeselect => {
+                self.state.select(Vec::new());
+            }
+            Command::SidebarSelectFirst => {
+                self.state.select_first();
+            }
+            Command::SidebarSelectLast => {
+                self.state.select_last();
+            }
+            Command::SidebarScrollDown(amount) => {
+                self.state.scroll_down(amount as usize);
+            }
+            Command::SidebarScrollUp(amount) => {
+                self.state.scroll_up(amount as usize);
+            }
+            _ => {}
         }
     }
 

@@ -1,13 +1,14 @@
+use crate::app::Focus;
+use crate::command::Command;
+use crate::style::{DefaultStyle, StyleProvider};
 use color_eyre::eyre::Result;
-use ratatui::Frame;
+use crossterm::event::KeyEvent;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders};
+use ratatui::Frame;
 use std::fmt;
 use tui_textarea::{Input, TextArea};
-
-use crate::app::Focus;
-use crate::style::{DefaultStyle, StyleProvider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -66,10 +67,75 @@ pub struct QueryEditor {
 impl QueryEditor {
     pub fn new() -> Self {
         let mut textarea = TextArea::default();
-        textarea.set_block(Block::default().borders(Borders::ALL).title("SQL Editor"));
+        textarea.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("SQL Editor"),
+        );
         Self {
             mode: Mode::Normal,
             textarea,
+        }
+    }
+
+    pub fn handle_command(&mut self, command: Command, key_event: KeyEvent) {
+        match command {
+            Command::EditorInputChar(_) => {
+                self.input(Input::from(key_event));
+            }
+            Command::EditorInputBackspace => {
+                self.input(Input::from(key_event));
+            }
+            Command::EditorInputDelete => {
+                self.input(Input::from(key_event));
+            }
+            Command::EditorInputEnter => {
+                self.input(Input::from(key_event));
+            }
+            Command::EditorMoveCursor(move_action) => {
+                self.textarea.move_cursor(move_action);
+            }
+            Command::EditorDeleteLineByEnd => {
+                self.textarea.delete_line_by_end();
+            }
+            Command::EditorCancelSelection => {
+                self.textarea.cancel_selection();
+            }
+            Command::EditorPaste => {
+                self.textarea.paste();
+            }
+            Command::EditorUndo => {
+                self.textarea.undo();
+            }
+            Command::EditorRedo => {
+                self.textarea.redo();
+            }
+            Command::EditorDeleteNextChar => {
+                self.textarea.delete_next_char();
+            }
+            Command::EditorSetMode(mode) => {
+                self.mode = mode;
+            }
+            Command::EditorScrollRelative(rows, cols) => {
+                self.textarea.scroll((rows, cols));
+            }
+            Command::EditorScroll(scrolling_action) => {
+                self.textarea.scroll(scrolling_action);
+            }
+            Command::EditorStartSelection => {
+                self.textarea.start_selection();
+            }
+            Command::EditorCopySelection => {
+                self.textarea.copy();
+            }
+            Command::EditorCutSelection => {
+                self.textarea.cut();
+            }
+            Command::EditorPerformPendingOperator => {
+                self.textarea.cancel_selection();
+                self.mode = Mode::Normal;
+            }
+            _ => {}
         }
     }
 

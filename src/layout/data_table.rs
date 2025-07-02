@@ -1,23 +1,33 @@
-use std::collections::HashMap;
-use std::time::Duration;
-
+use crate::app::Focus;
+use crate::command::Command;
+use crate::components::tabs::StatefulTabs;
+use crate::style::theme::COLOR_BLOCK_BG;
+use crate::style::{DefaultStyle, StyleProvider};
+use arboard::Clipboard;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::palette::tailwind;
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Cell, HighlightSpacing, Paragraph, Row, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Table, TableState, Tabs,
+    Block,
+    Borders,
+    Cell,
+    HighlightSpacing,
+    Paragraph,
+    Row,
+    Scrollbar,
+    ScrollbarOrientation,
+    ScrollbarState,
+    Table,
+    TableState,
+    Tabs,
 };
-use ratatui::{Frame, symbols};
-use unicode_width::UnicodeWidthStr;
-
-use crate::app::Focus;
-use crate::components::tabs::StatefulTabs;
-use crate::style::theme::COLOR_BLOCK_BG;
-use crate::style::{DefaultStyle, StyleProvider};
-use arboard::Clipboard;
+use ratatui::{symbols, Frame};
 use serde_json::Value;
+use sqlx::{postgres::PgRow, Row as SqlxRow, types::Json};
+use std::collections::HashMap;
+use std::time::Duration;
+use unicode_width::UnicodeWidthStr;
 
 const PALETTES: [tailwind::Palette; 4] = [
     tailwind::BLUE,
@@ -56,76 +66,12 @@ impl TableColors {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct DynamicData {
-    pub headers: Vec<String>,
-    pub rows: Vec<Vec<String>>,
-    pub column_widths: Vec<u16>,
-    pub min_column_widths: Vec<u16>,
-}
-
-impl DynamicData {
-    pub fn new(headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {
-        let column_widths = Self::calculate_column_widths(&headers, &rows);
-        let min_column_widths = column_widths.clone();
-        Self {
-            headers,
-            rows,
-            column_widths,
-            min_column_widths,
-        }
-    }
-
-    pub fn from_query_results(headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {
-        Self::new(headers, rows)
-    }
-
-    fn calculate_column_widths(headers: &[String], rows: &[Vec<String>]) -> Vec<u16> {
-        let mut widths: Vec<u16> = headers.iter().map(|h| h.width() as u16).collect();
-
-        for row in rows {
-            for (i, cell) in row.iter().enumerate() {
-                if i < widths.len() {
-                    widths[i] = widths[i].max(cell.width() as u16);
-                }
-            }
-        }
-
-        widths.iter().map(|&w| w.saturating_add(2).max(3)).collect()
-    }
-
-    pub fn headers(&self) -> &[String] {
-        &self.headers
-    }
-
-    pub fn rows(&self) -> &[Vec<String>] {
-        &self.rows
-    }
-
-    pub fn column_widths(&self) -> &[u16] {
-        &self.column_widths
-    }
-
-    pub fn len(&self) -> usize {
-        self.rows.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.rows.is_empty() || self.headers.is_empty()
-    }
-
-    pub fn adjust_column_width(&mut self, column: usize, delta: i16) {
-        if column < self.column_widths.len() {
-            let min_width = self.min_column_widths[column];
-            let new_width = self.column_widths[column] as i16 + delta;
-            self.column_widths[column] = new_width.max(min_width as i16) as u16;
-        }
-    }
-}
-
 pub struct DataTable<'a> {
     state: TableState,
-    pub data: DynamicData,
+    pub headers: Vec<String>,
+    pub rows: Vec<PgRow>,
+    pub column_widths: Vec<u16>,
+    pub min_column_widths: Vec<u16>,
     vertical_scroll_state: ScrollbarState,
     horizontal_scroll_state: ScrollbarState,
     horizontal_scroll: usize,
@@ -146,28 +92,29 @@ pub enum LoadingState {
 }
 
 impl<'a> DataTable<'a> {
-    pub fn new(headers: Vec<String>, rows: Vec<Vec<String>>) -> Self {
-        let data = DynamicData::from_query_results(headers, rows);
+    pub fn new(headers: Vec<String>, rows: Vec<PgRow>) -> Self {
         let mut tabs = StatefulTabs::new(vec!["Data Output", "Messages", "Query History"]);
-        if data.is_empty() {
+        if rows.is_empty() {
             tabs.set_index(1);
         }
+
+        let (column_widths, min_column_widths) = Self::calculate_column_widths(&headers, &rows);
+
         Self {
-            state: TableState::default().with_selected(if data.is_empty() {
-                None
-            } else {
-                Some(0)
-            }),
+            state: TableState::default().with_selected(if rows.is_empty() { None } else { Some(0) }),
             vertical_scroll_state: ScrollbarState::new(
-                (data.rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT,
+                (rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT,
             ),
             horizontal_scroll_state: ScrollbarState::new(
-                data.column_widths.iter().sum::<u16>().saturating_sub(1) as usize,
+                column_widths.iter().sum::<u16>().saturating_sub(1) as usize,
             ),
             colors: TableColors::new(&PALETTES[0]),
             color_index: 0,
-            data,
             horizontal_scroll: 0,
+            headers,
+            rows,
+            column_widths,
+            min_column_widths,
             tabs,
             status_message: None,
             elapsed: Duration::ZERO,
@@ -177,21 +124,133 @@ impl<'a> DataTable<'a> {
         }
     }
 
+    fn calculate_column_widths(headers: &[String], rows: &[PgRow]) -> (Vec<u16>, Vec<u16>) {
+        let mut widths: Vec<u16> = headers.iter().map(|h| h.width() as u16).collect();
+
+        let sample_size = 100;
+        for row in rows.iter().take(std::cmp::min(rows.len(), sample_size)) {
+            for (col_idx, col_width) in widths.iter_mut().enumerate() {
+                let val = Self::get_value_as_string(row, col_idx);
+                *col_width = (*col_width).max(val.width() as u16);
+            }
+        }
+
+        let final_widths: Vec<u16> = widths
+            .iter()
+            .map(|&w| w.saturating_add(2).max(3))
+            .collect();
+        (final_widths.clone(), final_widths)
+    }
+
+    fn get_value_as_string(row: &PgRow, index: usize) -> String {
+        macro_rules! try_get_string {
+            ($($typ:ty),*) => {
+                $(
+                    if let Ok(val) = row.try_get::<$typ, _>(index) {
+                        return val.to_string();
+                    }
+                )*
+            };
+        }
+
+        try_get_string!(
+            String,
+            &str,
+            i16,
+            i32,
+            i64,
+            f32,
+            f64,
+            bool,
+            sqlx::types::Uuid,
+            sqlx::types::chrono::NaiveDate,
+            sqlx::types::chrono::NaiveDateTime,
+            sqlx::types::chrono::NaiveTime,
+            sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>
+        );
+
+        if let Ok(val) = row.try_get::<Value, _>(index) {
+            return match serde_json::to_string(&val) {
+                Ok(s) => s,
+                Err(e) => format!("[json-error: {}]", e),
+            };
+        }
+
+        if let Ok(Json(val)) = row.try_get::<Json<Value>, _>(index) {
+            return match serde_json::to_string(&val) {
+                Ok(s) => s,
+                Err(e) => format!("[json-error: {}]", e),
+            };
+        }
+
+        if let Ok(val) = row.try_get::<Vec<u8>, _>(index) {
+            return hex::encode(val);
+        }
+
+        "[null]".to_string()
+    }
+
+    pub fn handle_command(&mut self, command: Command) {
+        match command {
+            Command::DataTablePreviousTab => self.tabs.previous(),
+            Command::DataTableNextTab => self.tabs.next(),
+            Command::DataTableNextRow => self.next_row(),
+            Command::DataTablePreviousRow => self.previous_row(),
+            Command::DataTableScrollRight => self.scroll_right(),
+            Command::DataTableScrollLeft => self.scroll_left(),
+            Command::DataTableNextColor => self.next_color(),
+            Command::DataTablePreviousColor => self.previous_color(),
+            Command::DataTableNextPage => self.next_page(),
+            Command::DataTablePreviousPage => self.previous_page(),
+            Command::DataTableJumpToFirstRow => self.jump_to_absolute_row(0),
+            Command::DataTableJumpToLastRow => {
+                self.jump_to_absolute_row(self.rows.len().saturating_sub(1))
+            }
+            Command::DataTableNextColumn => self.next_column(),
+            Command::DataTablePreviousColumn => self.previous_column(),
+            Command::DataTableAdjustColumnWidthIncrease => self.adjust_column_width(1),
+            Command::DataTableAdjustColumnWidthDecrease => self.adjust_column_width(-1),
+            Command::DataTableCopySelectedCell => {
+                if let Some(content) = self.copy_selected_cell() {
+                    self.status_message = Some(format!("Copied: {}", content));
+                }
+            }
+            Command::DataTableCopySelectedRow => {
+                if let Some(content) = self.copy_selected_row() {
+                    self.status_message = Some(format!("Copied row: {}", content));
+                }
+            }
+            Command::DataTableSetTabIndex(idx) => {
+                if idx < self.tabs.titles.len() {
+                    self.tabs.set_index(idx);
+                }
+            }
+            _ => {}
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.data.is_empty()
+        self.rows.is_empty()
     }
 
     pub fn total_pages(&self) -> usize {
-        if self.data.is_empty() {
+        if self.rows.is_empty() {
             return 1;
         }
-        (self.data.len() as f64 / self.page_size as f64).ceil() as usize
+        (self.rows.len() as f64 / self.page_size as f64).ceil() as usize
     }
 
-    fn get_current_page_rows(&self) -> &[Vec<String>] {
+    fn get_current_page_rows(&self) -> Vec<Vec<String>> {
         let start_index = self.current_page * self.page_size;
-        let end_index = (start_index + self.page_size).min(self.data.len());
-        &self.data.rows()[start_index..end_index]
+        let end_index = (start_index + self.page_size).min(self.rows.len());
+        self.rows[start_index..end_index]
+            .iter()
+            .map(|row| {
+                (0..self.headers.len())
+                    .map(|i| Self::get_value_as_string(row, i))
+                    .collect()
+            })
+            .collect()
     }
 
     pub fn next_row(&mut self) {
@@ -210,7 +269,7 @@ impl<'a> DataTable<'a> {
     }
 
     pub fn previous_row(&mut self) {
-        if self.data.is_empty() {
+        if self.rows.is_empty() {
             return;
         }
 
@@ -233,7 +292,7 @@ impl<'a> DataTable<'a> {
     }
 
     pub fn scroll_right(&mut self) {
-        if self.horizontal_scroll < self.data.column_widths.len().saturating_sub(1) {
+        if self.horizontal_scroll < self.column_widths.len().saturating_sub(1) {
             self.horizontal_scroll = self.horizontal_scroll.saturating_add(1);
             self.horizontal_scroll_state = self
                 .horizontal_scroll_state
@@ -286,11 +345,11 @@ impl<'a> DataTable<'a> {
     }
 
     pub fn jump_to_absolute_row(&mut self, absolute_row: usize) {
-        if self.data.is_empty() {
+        if self.rows.is_empty() {
             return;
         }
 
-        let total_rows = self.data.len();
+        let total_rows = self.rows.len();
         let target_absolute_row = absolute_row.min(total_rows.saturating_sub(1));
 
         let target_page = target_absolute_row / self.page_size;
@@ -310,7 +369,7 @@ impl<'a> DataTable<'a> {
 
     #[allow(dead_code)]
     pub fn jump_to_column(&mut self, col: usize) {
-        if col < self.data.headers().len() {
+        if col < self.headers.len() {
             self.horizontal_scroll = col;
             self.horizontal_scroll_state = self.horizontal_scroll_state.position(col);
         }
@@ -318,9 +377,10 @@ impl<'a> DataTable<'a> {
 
     #[allow(dead_code)]
     pub fn search_in_table(&mut self, query: &str) -> Option<(usize, usize)> {
-        for (row_idx, row) in self.data.rows().iter().enumerate() {
-            for (col_idx, cell) in row.iter().enumerate() {
-                if cell.to_lowercase().contains(&query.to_lowercase()) {
+        for (row_idx, row) in self.rows.iter().enumerate() {
+            for (col_idx, _col) in row.columns().iter().enumerate() {
+                let cell_value = Self::get_value_as_string(row, col_idx);
+                if cell_value.to_lowercase().contains(&query.to_lowercase()) {
                     let page_row_idx = row_idx % self.page_size;
                     let target_page = row_idx / self.page_size;
 
@@ -349,12 +409,12 @@ impl<'a> DataTable<'a> {
             (Some(row_idx_on_page), Some(col_idx)) => {
                 let absolute_row_idx = self.current_page * self.page_size + row_idx_on_page;
                 let adjusted_col = col_idx.saturating_sub(1) + self.horizontal_scroll;
-                let row = self.data.rows().get(absolute_row_idx)?;
+                let row = self.rows.get(absolute_row_idx)?;
 
                 if col_idx == 0 {
                     (absolute_row_idx + 1).to_string()
-                } else if adjusted_col < row.len() {
-                    row[adjusted_col].clone()
+                } else if adjusted_col < row.columns().len() {
+                    Self::get_value_as_string(row, adjusted_col)
                 } else {
                     return None;
                 }
@@ -374,33 +434,21 @@ impl<'a> DataTable<'a> {
         let absolute_selected_row_index =
             self.current_page * self.page_size + selected_row_index_on_page;
 
-        let headers = self.data.headers();
-        let row_data = self.data.rows().get(absolute_selected_row_index)?;
+        let headers = &self.headers;
+        let row_data = self.rows.get(absolute_selected_row_index)?;
 
-        if headers.len() != row_data.len() {
-            eprintln!(
-                "Error: Headers count ({}) does not match row data count ({}) for selected row index {}. Cannot form proper JSON.",
-                headers.len(),
-                row_data.len(),
-                absolute_selected_row_index
-            );
-            return None;
+        let mut row_as_json_object: HashMap<String, Value> = HashMap::new();
+        for (i, header) in headers.iter().enumerate() {
+            let cell_value = Self::get_value_as_string(row_data, i);
+            let json_value = if cell_value.eq_ignore_ascii_case("null")
+                || cell_value.eq_ignore_ascii_case("[null]")
+            {
+                Value::Null
+            } else {
+                Value::String(cell_value)
+            };
+            row_as_json_object.insert(header.clone(), json_value);
         }
-
-        let row_as_json_object: HashMap<String, Value> = headers
-            .iter()
-            .zip(row_data.iter())
-            .map(|(header, cell_value)| {
-                let json_value = if cell_value.eq_ignore_ascii_case("null")
-                    || cell_value.eq_ignore_ascii_case("[null]")
-                {
-                    Value::Null
-                } else {
-                    Value::String(cell_value.clone())
-                };
-                (header.clone(), json_value)
-            })
-            .collect();
 
         let json_string = serde_json::to_string_pretty(&row_as_json_object)
             .map_err(|e| eprintln!("Error: Failed to serialize row data to JSON: {}", e))
@@ -419,7 +467,8 @@ impl<'a> DataTable<'a> {
 
     pub fn adjust_column_width(&mut self, delta: i16) {
         if let Some(col) = self.state.selected_column() {
-            self.data.adjust_column_width(col, delta);
+            self.column_widths[col] = (self.column_widths[col] as i16 + delta)
+                .max(self.min_column_widths[col] as i16) as u16;
         }
     }
 
@@ -443,7 +492,6 @@ impl<'a> DataTable<'a> {
         let app_style = DefaultStyle {
             focus: current_focus.clone(),
         };
-
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -458,7 +506,7 @@ impl<'a> DataTable<'a> {
         let query_info_area = main_layout[2];
 
         let base_style = Style::default().bg(COLOR_BLOCK_BG);
-        let total_rows_str = format!("Total Rows: {}", self.data.len());
+        let total_rows_str = format!("Total Rows: {}", self.rows.len());
         let query_done_str = format!("Query Complete: {} ms", self.elapsed.as_millis());
         let pagination_info_str = format!("Page: {}/{}", self.current_page + 1, self.total_pages());
 
@@ -539,10 +587,10 @@ impl<'a> DataTable<'a> {
         let page_size = self.page_size;
         let current_page = self.current_page;
         let item_height = ITEM_HEIGHT;
-        let data_column_widths = self.data.column_widths();
-        let data_headers = self.data.headers();
+        let data_column_widths = &self.column_widths;
+        let data_headers = &self.headers;
 
-        let owned_current_page_rows: Vec<Vec<String>> = self.get_current_page_rows().to_vec();
+        let owned_current_page_rows: Vec<Vec<String>> = self.get_current_page_rows();
 
         let header_style = Style::default().fg(colors.header_fg).bg(colors.header_bg);
         let selected_row_style = Style::default()
@@ -639,7 +687,7 @@ impl<'a> DataTable<'a> {
     }
 
     fn render_scrollbar(&mut self, frame: &mut Frame, area: Rect) {
-        if self.data.is_empty() {
+        if self.is_empty() {
             return;
         }
 
@@ -681,28 +729,32 @@ impl<'a> DataTable<'a> {
     pub fn finish_loading(
         &mut self,
         headers: Vec<String>,
-        rows: Vec<Vec<String>>,
+        rows: Vec<PgRow>,
         elapsed: Duration,
     ) {
-        self.data = DynamicData::from_query_results(headers, rows);
+        self.headers = headers;
+        self.rows = rows;
         self.elapsed = elapsed;
         self.loading_state = LoadingState::Idle;
         self.status_message = Some(format!("Query complete in {} ms.", elapsed.as_millis()));
 
+        let (column_widths, min_column_widths) = Self::calculate_column_widths(&self.headers, &self.rows);
+        self.column_widths = column_widths;
+        self.min_column_widths = min_column_widths;
+
         self.state =
-            TableState::default().with_selected(if self.data.is_empty() { None } else { Some(0) });
+            TableState::default().with_selected(if self.is_empty() { None } else { Some(0) });
         self.vertical_scroll_state =
-            ScrollbarState::new((self.data.rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT);
+            ScrollbarState::new((self.rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT);
         self.horizontal_scroll_state = ScrollbarState::new(
-            self.data
-                .column_widths
+            self.column_widths
                 .iter()
                 .sum::<u16>()
                 .saturating_sub(1) as usize,
         );
         self.current_page = 0;
 
-        if self.data.is_empty() {
+        if self.is_empty() {
             self.tabs.set_index(1);
         } else {
             self.tabs.set_index(0);
