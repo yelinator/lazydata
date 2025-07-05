@@ -1,6 +1,7 @@
 use crate::app::Focus;
 use crate::command::Command;
 use crate::components::tabs::StatefulTabs;
+use crate::state::QueryHistoryEntry;
 use crate::style::theme::COLOR_BLOCK_BG;
 use crate::style::{DefaultStyle, StyleProvider};
 use arboard::Clipboard;
@@ -58,8 +59,10 @@ impl TableColors {
 
 pub struct DataTable<'a> {
     state: TableState,
+    pub history_table_state: TableState,
     pub headers: Vec<String>,
     pub rows: Vec<PgRow>,
+    pub query_history: Vec<QueryHistoryEntry>,
     pub column_widths: Vec<u16>,
     pub min_column_widths: Vec<u16>,
     vertical_scroll_state: ScrollbarState,
@@ -82,7 +85,11 @@ pub enum LoadingState {
 }
 
 impl<'a> DataTable<'a> {
-    pub fn new(headers: Vec<String>, rows: Vec<PgRow>) -> Self {
+    pub fn new(
+        headers: Vec<String>,
+        rows: Vec<PgRow>,
+        query_history: Vec<QueryHistoryEntry>,
+    ) -> Self {
         let mut tabs = StatefulTabs::new(vec!["Data Output", "Messages", "Query History"]);
         if rows.is_empty() {
             tabs.set_index(1);
@@ -96,6 +103,7 @@ impl<'a> DataTable<'a> {
             } else {
                 Some(0)
             }),
+            history_table_state: TableState::default(),
             vertical_scroll_state: ScrollbarState::new(
                 (rows.len().min(100).saturating_sub(1)) * ITEM_HEIGHT,
             ),
@@ -107,6 +115,7 @@ impl<'a> DataTable<'a> {
             horizontal_scroll: 0,
             headers,
             rows,
+            query_history,
             column_widths,
             min_column_widths,
             tabs,
@@ -187,6 +196,8 @@ impl<'a> DataTable<'a> {
             Command::DataTableNextTab => self.tabs.next(),
             Command::DataTableNextRow => self.next_row(),
             Command::DataTablePreviousRow => self.previous_row(),
+            Command::DataTableNextHistoryRow => self.next_history_row(),
+            Command::DataTablePreviousHistoryRow => self.previous_history_row(),
             Command::DataTableScrollRight => self.scroll_right(),
             Command::DataTableScrollLeft => self.scroll_left(),
             Command::DataTableNextColor => self.next_color(),
@@ -209,6 +220,16 @@ impl<'a> DataTable<'a> {
             Command::DataTableCopySelectedRow => {
                 if let Some(content) = self.copy_selected_row() {
                     self.status_message = Some(format!("Copied row: {}", content));
+                }
+            }
+            Command::DataTableCopyQueryToEditor => {
+                if let Some(query) = self.copy_selected_query_to_editor() {
+                    self.status_message = Some(format!("Copied query: {}", query));
+                }
+            }
+            Command::DataTableRunSelectedHistoryQuery => {
+                if let Some(query) = self.get_selected_history_query() {
+                    self.status_message = Some(format!("Running query: {}", query));
                 }
             }
             Command::DataTableSetTabIndex(idx) => {
@@ -272,6 +293,34 @@ impl<'a> DataTable<'a> {
         };
         self.state.select(Some(i));
         self.vertical_scroll_state = self.vertical_scroll_state.position(i * ITEM_HEIGHT);
+    }
+
+    pub fn next_history_row(&mut self) {
+        let i = match self.history_table_state.selected() {
+            Some(i) => {
+                if i >= self.query_history.len() - 1 {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.history_table_state.select(Some(i));
+    }
+
+    pub fn previous_history_row(&mut self) {
+        let i = match self.history_table_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.query_history.len() - 1
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.history_table_state.select(Some(i));
     }
 
     pub fn next_column(&mut self) {
@@ -456,6 +505,41 @@ impl<'a> DataTable<'a> {
         Some(json_string)
     }
 
+    pub fn copy_selected_query_to_editor(&self) -> Option<String> {
+        if let Some(selected) = self.history_table_state.selected() {
+            let query = self
+                .query_history
+                .iter()
+                .rev()
+                .nth(selected)
+                .unwrap()
+                .query
+                .clone();
+            if let Ok(mut clipboard) = Clipboard::new() {
+                let _ = clipboard.set_text(query.clone());
+            }
+            Some(query)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_selected_history_query(&self) -> Option<String> {
+        if let Some(selected) = self.history_table_state.selected() {
+            let query = self
+                .query_history
+                .iter()
+                .rev()
+                .nth(selected)
+                .unwrap()
+                .query
+                .clone();
+            Some(query)
+        } else {
+            None
+        }
+    }
+
     pub fn adjust_column_width(&mut self, delta: i16) {
         if let Some(col) = self.state.selected_column() {
             self.column_widths[col] = (self.column_widths[col] as i16 + delta)
@@ -557,13 +641,7 @@ impl<'a> DataTable<'a> {
                 frame.render_widget(messages_paragraph, content_area);
             }
             2 => {
-                let history_block = Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(app_style.border_style(Focus::Table))
-                    .style(app_style.block_style());
-                let history_paragraph = Paragraph::new("This is where query history would appear.")
-                    .block(history_block);
-                frame.render_widget(history_paragraph, content_area);
+                self.render_history_table(frame, content_area, current_focus);
             }
             _ => {}
         }
@@ -678,6 +756,63 @@ impl<'a> DataTable<'a> {
         frame.render_stateful_widget(t, area, &mut self.state);
     }
 
+    fn render_history_table(&mut self, frame: &mut Frame, area: Rect, current_focus: &Focus) {
+        let history_widget_style = DefaultStyle {
+            focus: current_focus.clone(),
+        };
+
+        let header_style = Style::default()
+            .fg(self.colors.header_fg)
+            .bg(self.colors.header_bg);
+        let selected_row_style = Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(self.colors.selected_row_style_fg);
+
+        let header = ["Query", "Timestamp", "Status", "Rows", "Time (ms)"]
+            .iter()
+            .map(|h| Cell::from(*h))
+            .collect::<Row>()
+            .style(header_style)
+            .height(1);
+
+        let rows = self.query_history.iter().rev().map(|entry| {
+            let query = entry.query.clone();
+            let timestamp = entry.timestamp.to_string();
+            let status = if entry.success { "OK" } else { "Error" };
+            let rows_affected = entry.rows_affected.to_string();
+            let execution_time = entry.execution_time.as_millis().to_string();
+
+            Row::new(vec![
+                Cell::from(query),
+                Cell::from(timestamp),
+                Cell::from(status),
+                Cell::from(rows_affected),
+                Cell::from(execution_time),
+            ])
+        });
+
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Percentage(50),
+                Constraint::Percentage(20),
+                Constraint::Percentage(10),
+                Constraint::Percentage(10),
+                Constraint::Percentage(10),
+            ],
+        )
+        .header(header)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(history_widget_style.border_style(Focus::Table))
+                .style(history_widget_style.block_style()),
+        )
+        .row_highlight_style(selected_row_style);
+
+        frame.render_stateful_widget(table, area, &mut self.history_table_state);
+    }
+
     fn render_scrollbar(&mut self, frame: &mut Frame, area: Rect) {
         if self.is_empty() {
             return;
@@ -718,12 +853,19 @@ impl<'a> DataTable<'a> {
         self.loading_state = LoadingState::Loading;
     }
 
-    pub fn finish_loading(&mut self, headers: Vec<String>, rows: Vec<PgRow>, elapsed: Duration) {
+    pub fn finish_loading(
+        &mut self,
+        headers: Vec<String>,
+        rows: Vec<PgRow>,
+        elapsed: Duration,
+        query_history: Vec<QueryHistoryEntry>,
+    ) {
         self.headers = headers;
         self.rows = rows;
         self.elapsed = elapsed;
         self.loading_state = LoadingState::Idle;
         self.status_message = Some(format!("Query complete in {} ms.", elapsed.as_millis()));
+        self.query_history = query_history;
 
         let (column_widths, min_column_widths) =
             Self::calculate_column_widths(&self.headers, &self.rows);

@@ -143,6 +143,12 @@ impl QueryEditor {
         self.textarea.lines().join("\n")
     }
 
+    pub fn set_textarea_content(&mut self, content: String) {
+        self.textarea = TextArea::from(content.lines().map(String::from).collect::<Vec<String>>());
+        self.textarea.set_block(self.mode.block(&Focus::Editor));
+        self.textarea.set_cursor_style(self.mode.cursor_style());
+    }
+
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, current_focus: Focus) {
         self.textarea.set_block(self.mode.block(&current_focus));
         self.textarea.set_cursor_style(self.mode.cursor_style());

@@ -1,10 +1,11 @@
 use super::postgres::PostgresExecutor;
 use crate::database::pool::DbPool;
 
-use crate::state::update_query_stats;
+use crate::state::{QueryHistoryEntry, add_to_history, update_query_stats};
 use crate::utils::query_timer::query_timer;
 use crate::utils::query_type::Query;
 use async_trait::async_trait;
+use chrono::Utc;
 use sqlx::{Column, Row, postgres::PgRow};
 use std::time::Duration;
 
@@ -72,8 +73,9 @@ where
 
 pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, sqlx::Error> {
     let executor = create_executor(pool);
+    let query_start_time = Utc::now();
 
-    match Query::from_sql(sql) {
+    let result = match Query::from_sql(sql) {
         Query::SELECT => {
             let (rows_result, elapsed) = query_timer(executor.fetch(sql)).await;
             let rows = rows_result?;
@@ -112,5 +114,37 @@ pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, 
         Query::DELETE => run_affected_query(executor.delete(sql), "DELETE").await,
 
         Query::UNKNOWN => Err(sqlx::Error::Protocol("Unsupported query".into())),
-    }
+    };
+
+    let execution_time = Utc::now()
+        .signed_duration_since(query_start_time)
+        .to_std()
+        .unwrap_or_default();
+
+    let history_entry = match &result {
+        Ok(res) => {
+            let (success, rows_affected) = match res {
+                ExecutionResult::Data { meta, .. } => (true, meta.rows),
+                ExecutionResult::Affected { rows, .. } => (true, *rows),
+            };
+            QueryHistoryEntry {
+                query: sql.to_string(),
+                timestamp: query_start_time,
+                success,
+                rows_affected,
+                execution_time,
+            }
+        }
+        Err(_) => QueryHistoryEntry {
+            query: sql.to_string(),
+            timestamp: query_start_time,
+            success: false,
+            rows_affected: 0,
+            execution_time,
+        },
+    };
+
+    add_to_history(history_entry).await;
+
+    result
 }

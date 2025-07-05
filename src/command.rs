@@ -11,6 +11,8 @@ pub enum Command {
     DataTableNextTab,
     DataTableNextRow,
     DataTablePreviousRow,
+    DataTableNextHistoryRow,
+    DataTablePreviousHistoryRow,
     DataTableScrollRight,
     DataTableScrollLeft,
     DataTableNextColor,
@@ -25,6 +27,8 @@ pub enum Command {
     DataTableAdjustColumnWidthDecrease,
     DataTableCopySelectedCell,
     DataTableCopySelectedRow,
+    DataTableCopyQueryToEditor,
+    DataTableRunSelectedHistoryQuery,
     DataTableSetTabIndex(usize),
 
     SidebarToggleSelected,

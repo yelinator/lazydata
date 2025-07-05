@@ -5,8 +5,12 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 use tui_textarea::{CursorMove, Input, Key, Scrolling};
 
 pub trait KeyMapper {
-    fn map_key_to_command(&mut self, key_event: KeyEvent, current_focus: &Focus)
-    -> Option<Command>;
+    fn map_key_to_command(
+        &mut self,
+        key_event: KeyEvent,
+        current_focus: &Focus,
+        tab_index: usize,
+    ) -> Option<Command>;
 
     fn editor_mode(&self) -> Mode;
 }
@@ -249,14 +253,26 @@ impl DefaultKeyMapper {
         }
     }
 
-    fn map_data_table_key(&self, key: KeyCode) -> Option<Command> {
+    fn map_data_table_key(&self, key: KeyCode, tab_index: usize) -> Option<Command> {
         use KeyCode::*;
         match key {
             Char('[') => Some(Command::DataTablePreviousTab),
             Char(']') => Some(Command::DataTableNextTab),
 
-            Char('j') | Down => Some(Command::DataTableNextRow),
-            Char('k') | Up => Some(Command::DataTablePreviousRow),
+            Char('j') | Down => {
+                if tab_index == 2 {
+                    Some(Command::DataTableNextHistoryRow)
+                } else {
+                    Some(Command::DataTableNextRow)
+                }
+            }
+            Char('k') | Up => {
+                if tab_index == 2 {
+                    Some(Command::DataTablePreviousHistoryRow)
+                } else {
+                    Some(Command::DataTablePreviousRow)
+                }
+            }
             PageDown => Some(Command::DataTableNextPage),
             PageUp => Some(Command::DataTablePreviousPage),
             Char(' ') => Some(Command::DataTableNextPage),
@@ -275,6 +291,8 @@ impl DefaultKeyMapper {
 
             Char('y') => Some(Command::DataTableCopySelectedCell),
             Char('Y') => Some(Command::DataTableCopySelectedRow),
+            Char('C') => Some(Command::DataTableCopyQueryToEditor),
+            Char('R') => Some(Command::DataTableRunSelectedHistoryQuery),
 
             Char(c) if c.is_ascii_digit() => {
                 if let Some(digit) = c.to_digit(10) {
@@ -314,16 +332,21 @@ impl KeyMapper for DefaultKeyMapper {
         &mut self,
         key_event: KeyEvent,
         current_focus: &Focus,
+        tab_index: usize,
     ) -> Option<Command> {
         if key_event.kind != KeyEventKind::Press {
             return None;
         }
 
-        match key_event.code {
-            KeyCode::Char('q') => return Some(Command::Quit),
-            KeyCode::Tab => return Some(Command::ToggleFocus),
-            KeyCode::F(5) => return Some(Command::ExecuteQuery),
-            _ => {}
+        let command = match key_event.code {
+            KeyCode::Char('q') => Some(Command::Quit),
+            KeyCode::Tab => Some(Command::ToggleFocus),
+            KeyCode::F(5) => Some(Command::ExecuteQuery),
+            _ => None,
+        };
+
+        if command.is_some() {
+            return command;
         }
 
         match current_focus {
@@ -331,7 +354,7 @@ impl KeyMapper for DefaultKeyMapper {
                 let input = Input::from(key_event);
                 self.map_query_editor_key(input)
             }
-            Focus::Table => self.map_data_table_key(key_event.code),
+            Focus::Table => self.map_data_table_key(key_event.code, tab_index),
             Focus::Sidebar => self.map_sidebar_key(key_event.code),
         }
     }

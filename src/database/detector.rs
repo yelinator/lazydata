@@ -33,7 +33,7 @@ pub fn get_installed_databases() -> Result<Vec<String>> {
         if Command::new(tool.command)
             .args(tool.args)
             .output()
-            .map_or(false, |output| output.status.success())
+            .is_ok_and(|output| output.status.success())
         {
             found.push(tool.name.to_string());
         }

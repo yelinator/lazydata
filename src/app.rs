@@ -9,7 +9,7 @@ use crate::database::{
 };
 use crate::layout::query_editor::QueryEditor;
 use crate::layout::{data_table::DataTable, sidebar::SideBar};
-use crate::state::get_query_stats;
+use crate::state::{get_history, get_query_stats, load_history, save_history};
 use color_eyre::eyre::Result;
 use crossterm::execute;
 use crossterm::{
@@ -83,7 +83,7 @@ impl App<'_> {
             focus: Focus::Sidebar,
             query: String::new(),
             exit: false,
-            data_table: DataTable::new(vec![], vec![]),
+            data_table: DataTable::new(vec![], vec![], vec![]),
             query_editor: QueryEditor::new(),
             sidebar: SideBar::new(vec![], Focus::Sidebar),
             pool: None,
@@ -92,6 +92,9 @@ impl App<'_> {
     }
 
     pub async fn init(&mut self) -> Result<()> {
+        load_history().await?;
+        self.data_table.query_history = get_history().await;
+
         let databases = get_installed_databases()?;
 
         if databases.is_empty() {
@@ -209,16 +212,79 @@ impl App<'_> {
             terminal.draw(|f| self.render_ui(f))?;
             let _ = self.handle_events(&mut terminal).await;
         }
+        save_history().await?;
         Ok(())
     }
 
     async fn handle_events(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key_event) = event::read()? {
-                if let Some(command) = self.key_mapper.map_key_to_command(key_event, &self.focus) {
+                if let Some(command) = self.key_mapper.map_key_to_command(
+                    key_event,
+                    &self.focus,
+                    self.data_table.tabs.index,
+                ) {
                     self.handle_command(command, key_event, terminal).await?;
                     self.query_editor.mode = self.key_mapper.editor_mode();
                 }
+            }
+        }
+        Ok(())
+    }
+
+    async fn execute_current_query(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let query = self.current_query();
+        if !query.is_empty() {
+            self.query = query.clone();
+
+            self.data_table.start_loading();
+            self.draw_once(terminal);
+
+            if let Some(pool) = &self.pool {
+                match execute_query(pool, &query).await {
+                    Ok(ExecutionResult::Data {
+                        headers,
+                        rows,
+                        meta: DataMeta { rows: _, message },
+                    }) => {
+                        let elapsed_duration = if let Some(stats) = get_query_stats().await {
+                            stats.elapsed
+                        } else {
+                            Duration::ZERO
+                        };
+                        let query_history = get_history().await;
+                        self.data_table.finish_loading(
+                            headers,
+                            rows,
+                            elapsed_duration,
+                            query_history,
+                        );
+                        self.data_table.status_message = Some(message);
+                    }
+                    Ok(ExecutionResult::Affected { rows: _, message }) => {
+                        let elapsed_duration = if let Some(stats) = get_query_stats().await {
+                            stats.elapsed
+                        } else {
+                            Duration::ZERO
+                        };
+                        let query_history = get_history().await;
+                        self.data_table.finish_loading(
+                            Vec::new(),
+                            Vec::new(),
+                            elapsed_duration,
+                            query_history,
+                        );
+                        self.data_table.status_message = Some(message);
+                    }
+                    Err(err) => {
+                        self.data_table
+                            .set_error_state(format!("❌ Error: {}", err));
+                    }
+                }
+            } else {
+                // Handle the case where the pool is not available (e.g., not connected to a DB)
+                self.data_table
+                    .set_error_state("Database connection pool not available.".to_string());
             }
         }
         Ok(())
@@ -239,61 +305,15 @@ impl App<'_> {
                 self.toggle_focus();
             }
             Command::ExecuteQuery => {
-                let query = self.current_query();
-                if !query.is_empty() {
-                    self.query = query.clone();
-
-                    self.data_table.start_loading();
-                    self.draw_once(terminal);
-
-                    if let Some(pool) = &self.pool {
-                        match execute_query(pool, &query).await {
-                            Ok(ExecutionResult::Data {
-                                headers,
-                                rows,
-                                meta: DataMeta { rows: _, message },
-                            }) => {
-                                let elapsed_duration = if let Some(stats) = get_query_stats().await
-                                {
-                                    stats.elapsed
-                                } else {
-                                    Duration::ZERO
-                                };
-                                self.data_table
-                                    .finish_loading(headers, rows, elapsed_duration);
-                                self.data_table.status_message = Some(message);
-                            }
-                            Ok(ExecutionResult::Affected { rows: _, message }) => {
-                                let elapsed_duration = if let Some(stats) = get_query_stats().await
-                                {
-                                    stats.elapsed
-                                } else {
-                                    Duration::ZERO
-                                };
-                                self.data_table.finish_loading(
-                                    Vec::new(),
-                                    Vec::new(),
-                                    elapsed_duration,
-                                );
-                                self.data_table.status_message = Some(message);
-                            }
-                            Err(err) => {
-                                self.data_table
-                                    .set_error_state(format!("❌ Error: {}", err));
-                            }
-                        }
-                    } else {
-                        // Handle the case where the pool is not available (e.g., not connected to a DB)
-                        self.data_table
-                            .set_error_state("Database connection pool not available.".to_string());
-                    }
-                }
+                self.execute_current_query(terminal).await?;
             }
 
             Command::DataTablePreviousTab
             | Command::DataTableNextTab
             | Command::DataTableNextRow
             | Command::DataTablePreviousRow
+            | Command::DataTableNextHistoryRow
+            | Command::DataTablePreviousHistoryRow
             | Command::DataTableScrollRight
             | Command::DataTableScrollLeft
             | Command::DataTableNextColor
@@ -308,8 +328,19 @@ impl App<'_> {
             | Command::DataTableAdjustColumnWidthDecrease
             | Command::DataTableCopySelectedCell
             | Command::DataTableCopySelectedRow
-            | Command::DataTableSetTabIndex(_) => {
+            | Command::DataTableCopyQueryToEditor => {
                 self.data_table.handle_command(command);
+            }
+            Command::DataTableRunSelectedHistoryQuery => {
+                if let Some(query) = self.data_table.get_selected_history_query() {
+                    self.query_editor.set_textarea_content(query);
+                    self.execute_current_query(terminal).await?;
+                }
+            }
+            Command::DataTableSetTabIndex(idx) => {
+                if idx < self.data_table.tabs.titles.len() {
+                    self.data_table.tabs.set_index(idx);
+                }
             }
 
             Command::SidebarToggleSelected
