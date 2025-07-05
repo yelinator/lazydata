@@ -27,7 +27,7 @@ const PALETTES: [tailwind::Palette; 4] = [
     tailwind::RED,
 ];
 
-const ITEM_HEIGHT: usize = 3;
+const ITEM_HEIGHT: usize = 1;
 
 struct TableColors {
     buffer_bg: Color,
@@ -37,8 +37,6 @@ struct TableColors {
     selected_row_style_fg: Color,
     selected_column_style_fg: Color,
     selected_cell_style_fg: Color,
-    normal_row_color: Color,
-    alt_row_color: Color,
 }
 
 impl TableColors {
@@ -51,8 +49,6 @@ impl TableColors {
             selected_row_style_fg: color.c400,
             selected_column_style_fg: color.c400,
             selected_cell_style_fg: color.c600,
-            normal_row_color: tailwind::SLATE.c950,
-            alt_row_color: tailwind::SLATE.c900,
         }
     }
 }
@@ -187,7 +183,7 @@ impl<'a> DataTable<'a> {
             return hex::encode(val);
         }
 
-        "[null]".to_string()
+        "".to_string()
     }
 
     pub fn handle_command(&mut self, command: Command) {
@@ -560,7 +556,7 @@ impl<'a> DataTable<'a> {
     }
 
     fn create_padded_cell_text(content: &str) -> Text<'_> {
-        Text::from(vec![Line::raw(""), Line::raw(content), Line::raw("")])
+        Text::from(Line::raw(content))
     }
 
     pub fn draw(&mut self, frame: &mut Frame, area: Rect, current_focus: &Focus) {
@@ -717,14 +713,8 @@ impl<'a> DataTable<'a> {
             .height(1);
 
         let rows = owned_current_page_rows.iter().enumerate().map(|(i, row)| {
-            let color = if i % 2 == 0 {
-                colors.normal_row_color
-            } else {
-                colors.alt_row_color
-            };
-
             let absolute_row_number = current_page * page_size + i + 1;
-            let number_cell = Cell::from(Text::from(format!("\n{}\n", absolute_row_number)));
+            let number_cell = Cell::from(Text::from(format!("{}", absolute_row_number)));
 
             let data_cells = row
                 .iter()
@@ -733,7 +723,7 @@ impl<'a> DataTable<'a> {
                 .map(|text| Cell::from(Self::create_padded_cell_text(text.as_str())));
 
             Row::new(std::iter::once(number_cell).chain(data_cells))
-                .style(Style::new().fg(colors.row_fg).bg(color))
+                .style(Style::new().fg(colors.row_fg))
                 .height(item_height as u16)
         });
 

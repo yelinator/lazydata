@@ -91,6 +91,6 @@ impl DatabaseExecutor for PostgresExecutor {
             return hex::encode(val);
         }
 
-        "[null]".to_string()
+        "".to_string()
     }
 }
