@@ -13,6 +13,7 @@ pub trait KeyMapper {
     ) -> Option<Command>;
 
     fn editor_mode(&self) -> Mode;
+    fn map_popup_key(&mut self, key_event: KeyEvent) -> Option<Command>;
 }
 
 pub struct DefaultKeyMapper {
@@ -340,6 +341,7 @@ impl KeyMapper for DefaultKeyMapper {
 
         let command = match key_event.code {
             KeyCode::Char('q') => Some(Command::Quit),
+            KeyCode::Char('?') => Some(Command::ShowKeyMap),
             KeyCode::Tab => Some(Command::ToggleFocus),
             KeyCode::F(5) => Some(Command::ExecuteQuery),
             _ => None,
@@ -356,6 +358,19 @@ impl KeyMapper for DefaultKeyMapper {
             }
             Focus::Table => self.map_data_table_key(key_event.code, tab_index),
             Focus::Sidebar => self.map_sidebar_key(key_event.code),
+        }
+    }
+
+    fn map_popup_key(&mut self, key_event: KeyEvent) -> Option<Command> {
+        if key_event.kind != KeyEventKind::Press {
+            return None;
+        }
+
+        match key_event.code {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Char('?') => Some(Command::ClosePopup),
+            KeyCode::Char('k') | KeyCode::Up => Some(Command::KeyMapScrollUp),
+            KeyCode::Char('j') | KeyCode::Down => Some(Command::KeyMapScrollDown),
+            _ => None,
         }
     }
 

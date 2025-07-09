@@ -22,9 +22,9 @@ use inquire::Select;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, ScrollbarState},
 };
 use std::io::Write;
 use std::sync::{
@@ -38,8 +38,10 @@ use tokio::time::sleep;
 use tui_tree_widget::TreeItem;
 
 use crate::command::Command;
+use crate::components::popup::Popup;
 use crate::key_maps::{DefaultKeyMapper, KeyMapper};
-use crate::style::theme::{COLOR_BLACK, COLOR_HIGHLIGHT_BG, COLOR_UNFOCUSED, COLOR_WHITE};
+use crate::layout::key_map_guide::get_key_map_guide;
+use crate::style::theme::{COLOR_UNFOCUSED, COLOR_WHITE};
 
 #[derive(PartialEq, Debug, Clone)]
 pub enum Focus {
@@ -56,14 +58,6 @@ impl Focus {
             Focus::Table => Focus::Sidebar,
         }
     }
-
-    pub fn as_str(&self) -> &str {
-        match self {
-            Focus::Sidebar => "Sidebar",
-            Focus::Editor => "Editor",
-            Focus::Table => "Table",
-        }
-    }
 }
 
 pub struct App<'a> {
@@ -76,6 +70,9 @@ pub struct App<'a> {
     pub pool: Option<DbPool>,
     pub connection_name: Option<String>,
     key_mapper: DefaultKeyMapper,
+    pub show_key_map: bool,
+    pub key_map_scroll: u16,
+    key_map_scroll_state: ScrollbarState,
 }
 
 impl App<'_> {
@@ -90,6 +87,9 @@ impl App<'_> {
             pool: None,
             connection_name: None,
             key_mapper: DefaultKeyMapper::new(),
+            show_key_map: false,
+            key_map_scroll: 0,
+            key_map_scroll_state: ScrollbarState::default(),
         }
     }
 
@@ -221,11 +221,17 @@ impl App<'_> {
     async fn handle_events(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key_event) = event::read()? {
-                if let Some(command) = self.key_mapper.map_key_to_command(
-                    key_event,
-                    &self.focus,
-                    self.data_table.tabs.index,
-                ) {
+                let command = if self.show_key_map {
+                    self.key_mapper.map_popup_key(key_event)
+                } else {
+                    self.key_mapper.map_key_to_command(
+                        key_event,
+                        &self.focus,
+                        self.data_table.tabs.index,
+                    )
+                };
+
+                if let Some(command) = command {
                     self.handle_command(command, key_event, terminal).await?;
                     self.query_editor.mode = self.key_mapper.editor_mode();
                 }
@@ -296,6 +302,19 @@ impl App<'_> {
             // Global Commands
             Command::Quit => {
                 self.exit = true;
+            }
+            Command::ShowKeyMap => {
+                self.show_key_map = true;
+                self.key_map_scroll = 0; // Reset scroll when showing
+            }
+            Command::ClosePopup => {
+                self.show_key_map = false;
+            }
+            Command::KeyMapScrollUp => {
+                self.key_map_scroll = self.key_map_scroll.saturating_sub(1);
+            }
+            Command::KeyMapScrollDown => {
+                self.key_map_scroll = self.key_map_scroll.saturating_add(1);
             }
             Command::ToggleFocus => {
                 self.toggle_focus();
@@ -402,20 +421,24 @@ impl App<'_> {
             .draw(f, right_chunks[1], &self.focus.clone());
 
         let focus_text = Line::from(vec![
-            Span::styled(
+            /* Span::styled(
                 format!(" Focus: {} ", self.focus.as_str()),
                 Style::default()
                     .bg(COLOR_HIGHLIGHT_BG)
                     .fg(COLOR_BLACK)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" (Tab to change) "),
+            Span::raw(" (Tab to change) "), */
             Span::styled(
                 " q: Quit ",
                 Style::default().bg(COLOR_UNFOCUSED).fg(COLOR_WHITE),
             ),
             Span::styled(
                 " F5: Execute Query ",
+                Style::default().bg(COLOR_UNFOCUSED).fg(COLOR_WHITE),
+            ),
+            Span::styled(
+                " ?: Key Maps ",
                 Style::default().bg(COLOR_UNFOCUSED).fg(COLOR_WHITE),
             ),
         ]);
@@ -425,6 +448,16 @@ impl App<'_> {
             .style(Style::default().fg(COLOR_WHITE).bg(Color::Black));
 
         f.render_widget(status_block, outer_chunks[1]);
+
+        if self.show_key_map {
+            let popup = Popup::new(
+                "Key Maps",
+                get_key_map_guide(),
+                self.key_map_scroll,
+                &mut self.key_map_scroll_state,
+            );
+            f.render_widget(popup, f.area());
+        }
     }
 
     fn toggle_focus(&mut self) {

@@ -6,6 +6,10 @@ pub enum Command {
     Quit,
     ToggleFocus,
     ExecuteQuery,
+    ShowKeyMap,
+    ClosePopup,
+    KeyMapScrollUp,
+    KeyMapScrollDown,
 
     DataTablePreviousTab,
     DataTableNextTab,
@@ -63,7 +67,7 @@ pub enum Command {
 
     NoOp,
 }
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CommandCategory {
     Global,
     Editor,
