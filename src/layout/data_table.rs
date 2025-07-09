@@ -843,19 +843,12 @@ impl<'a> DataTable<'a> {
         self.loading_state = LoadingState::Loading;
     }
 
-    pub fn finish_loading(
-        &mut self,
-        headers: Vec<String>,
-        rows: Vec<PgRow>,
-        elapsed: Duration,
-        query_history: Vec<QueryHistoryEntry>,
-    ) {
+    pub fn finish_loading(&mut self, headers: Vec<String>, rows: Vec<PgRow>, elapsed: Duration) {
         self.headers = headers;
         self.rows = rows;
         self.elapsed = elapsed;
         self.loading_state = LoadingState::Idle;
         self.status_message = Some(format!("Query complete in {} ms.", elapsed.as_millis()));
-        self.query_history = query_history;
 
         let (column_widths, min_column_widths) =
             Self::calculate_column_widths(&self.headers, &self.rows);

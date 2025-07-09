@@ -9,6 +9,8 @@ use tokio::sync::RwLock;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct QueryHistoryEntry {
     pub query: String,
+    #[serde(default)]
+    pub connection_name: Option<String>,
     pub timestamp: DateTime<Utc>,
     pub success: bool,
     pub rows_affected: usize,
@@ -99,7 +101,15 @@ pub async fn add_to_history(entry: QueryHistoryEntry) {
     history.push(entry);
 }
 
-pub async fn get_history() -> Vec<QueryHistoryEntry> {
+pub async fn get_history(connection_name: Option<String>) -> Vec<QueryHistoryEntry> {
     let history = GLOBAL_QUERY_HISTORY.read().await;
-    history.clone()
+    if let Some(name) = connection_name {
+        history
+            .iter()
+            .filter(|entry| entry.connection_name.as_deref() == Some(name.as_str()))
+            .cloned()
+            .collect()
+    } else {
+        history.clone()
+    }
 }

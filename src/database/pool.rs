@@ -9,6 +9,16 @@ pub enum DbPool {
     SQLite(SqlitePool),
 }
 
+impl DbPool {
+    pub fn get_type(&self) -> DatabaseType {
+        match self {
+            DbPool::Postgres(_) => DatabaseType::PostgreSQL,
+            DbPool::MySQL(_) => DatabaseType::MySQL,
+            DbPool::SQLite(_) => DatabaseType::SQLite,
+        }
+    }
+}
+
 pub async fn pool(
     db_type: DatabaseType,
     details: &ConnectionDetails,

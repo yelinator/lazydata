@@ -71,9 +71,14 @@ where
     Ok(format_affected_result(query_type, rows, elapsed))
 }
 
-pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, sqlx::Error> {
+pub async fn execute_query(
+    pool: &DbPool,
+    sql: &str,
+    db_name: Option<String>,
+) -> Result<ExecutionResult, sqlx::Error> {
     let executor = create_executor(pool);
     let query_start_time = Utc::now();
+    let connection_name = Some(pool.get_type().to_string());
 
     let result = match Query::from_sql(sql) {
         Query::SELECT => {
@@ -129,6 +134,7 @@ pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, 
             };
             QueryHistoryEntry {
                 query: sql.to_string(),
+                connection_name: db_name.clone(),
                 timestamp: query_start_time,
                 success,
                 rows_affected,
@@ -137,6 +143,7 @@ pub async fn execute_query(pool: &DbPool, sql: &str) -> Result<ExecutionResult, 
         }
         Err(_) => QueryHistoryEntry {
             query: sql.to_string(),
+            connection_name: connection_name.clone(),
             timestamp: query_start_time,
             success: false,
             rows_affected: 0,

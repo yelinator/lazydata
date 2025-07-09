@@ -74,6 +74,7 @@ pub struct App<'a> {
     pub query_editor: QueryEditor,
     pub sidebar: SideBar,
     pub pool: Option<DbPool>,
+    pub connection_name: Option<String>,
     key_mapper: DefaultKeyMapper,
 }
 
@@ -87,14 +88,12 @@ impl App<'_> {
             query_editor: QueryEditor::new(),
             sidebar: SideBar::new(vec![], Focus::Sidebar),
             pool: None,
+            connection_name: None,
             key_mapper: DefaultKeyMapper::new(),
         }
     }
 
     pub async fn init(&mut self) -> Result<()> {
-        load_history().await?;
-        self.data_table.query_history = get_history().await;
-
         let databases = get_installed_databases()?;
 
         if databases.is_empty() {
@@ -108,7 +107,7 @@ impl App<'_> {
 
         if let Ok(db_name) = selected {
             if let Some(db_type) = Self::map_db_name_to_type(&db_name) {
-                self.setup_and_run_app(db_type).await?;
+                self.setup_and_run_app(db_type, db_name.clone()).await?;
             } else {
                 println!("❌ Unsupported database.");
             }
@@ -132,8 +131,11 @@ impl App<'_> {
         self.query_editor.textarea_content()
     }
 
-    async fn setup_and_run_app(&mut self, db_type: DatabaseType) -> Result<()> {
+    async fn setup_and_run_app(&mut self, db_type: DatabaseType, _db_name: String) -> Result<()> {
         let details: ConnectionDetails = get_connection_details(db_type)?;
+        self.connection_name = details.database.clone();
+        load_history().await?;
+        self.data_table.query_history = get_history(self.connection_name.clone()).await;
         let pool = pool(db_type, &details).await?;
 
         self.pool = Some(pool.clone());
@@ -241,7 +243,7 @@ impl App<'_> {
             self.draw_once(terminal);
 
             if let Some(pool) = &self.pool {
-                match execute_query(pool, &query).await {
+                match execute_query(pool, &query, self.connection_name.clone()).await {
                     Ok(ExecutionResult::Data {
                         headers,
                         rows,
@@ -252,13 +254,10 @@ impl App<'_> {
                         } else {
                             Duration::ZERO
                         };
-                        let query_history = get_history().await;
-                        self.data_table.finish_loading(
-                            headers,
-                            rows,
-                            elapsed_duration,
-                            query_history,
-                        );
+                        self.data_table.query_history =
+                            get_history(self.connection_name.clone()).await;
+                        self.data_table
+                            .finish_loading(headers, rows, elapsed_duration);
                         self.data_table.status_message = Some(message);
                     }
                     Ok(ExecutionResult::Affected { rows: _, message }) => {
@@ -267,13 +266,10 @@ impl App<'_> {
                         } else {
                             Duration::ZERO
                         };
-                        let query_history = get_history().await;
-                        self.data_table.finish_loading(
-                            Vec::new(),
-                            Vec::new(),
-                            elapsed_duration,
-                            query_history,
-                        );
+                        self.data_table.query_history =
+                            get_history(self.connection_name.clone()).await;
+                        self.data_table
+                            .finish_loading(Vec::new(), Vec::new(), elapsed_duration);
                         self.data_table.status_message = Some(message);
                     }
                     Err(err) => {
