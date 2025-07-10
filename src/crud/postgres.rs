@@ -48,9 +48,9 @@ impl DatabaseExecutor for PostgresExecutor {
 
     fn get_value_as_string(&self, row: &PgRow, index: usize) -> String {
         macro_rules! try_get_string {
-            ($($typ:ty),*) => {
+            ($($type:ty),*) => {
                 $(
-                    if let Ok(val) = row.try_get::<$typ, _>(index) {
+                    if let Ok(val) = row.try_get::<$type, _>(index) {
                         return val.to_string();
                     }
                 )*

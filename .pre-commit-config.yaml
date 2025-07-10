@@ -1,0 +1,45 @@
+default_install_hook_types: ["pre-commit", "commit-msg"]
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: Format Rust code with cargo fmt
+        entry: cargo fmt
+        language: system
+        types: [rust]
+        args: ["--check"]
+        pass_filenames: false
+
+      - id: cargo-clippy
+        name: Lint Rust code with cargo clippy
+        entry: cargo clippy
+        language: system
+        types: [rust]
+        args: ["--all-targets","--all-features", "--", "-D", "warnings"]
+        pass_filenames: false
+
+      - id: typos
+        name: Run Typos Spell Checker
+        entry: typos
+        language: system
+        types: [text]
+        files: '\.(rs|md|toml|yaml|json|txt)$'
+
+      - id: cargo-check
+        name: Check Rust compilation with cargo check
+        entry: cargo check
+        language: system
+        pass_filenames: false
