@@ -1,10 +1,12 @@
 use crate::crud::executor::{DataMeta, ExecutionResult, execute_query};
-use crate::database::fetch::metadata_to_tree_items;
+use crate::database::connections::{Connection, load_connections, save_connections};
+use crate::database::fetch::{
+    Database, TableMetadata, fetch_databases, fetch_table_details, fetch_tables,
+    metadata_to_tree_items,
+};
 use crate::database::pool::DbPool;
 use crate::database::{
-    connector::{ConnectionDetails, DatabaseType, get_connection_details},
-    detector::get_installed_databases,
-    fetch::fetch_all_table_metadata,
+    connector::{ConnectionDetails, DatabaseType},
     pool::pool,
 };
 use crate::layout::query_editor::QueryEditor;
@@ -18,7 +20,7 @@ use crossterm::{
     style::Print,
     terminal::{Clear, ClearType},
 };
-use inquire::Select;
+use inquire::{Confirm, Password, Select, Text};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Direction, Layout},
@@ -26,6 +28,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, ScrollbarState},
 };
+use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{
     Arc,
@@ -73,6 +76,10 @@ pub struct App<'a> {
     pub show_key_map: bool,
     pub key_map_scroll: u16,
     key_map_scroll_state: ScrollbarState,
+    connections: Vec<Connection>,
+    databases: Vec<Database>,
+    current_connection: Option<Connection>,
+    table_details_cache: HashMap<String, TableMetadata>,
 }
 
 impl App<'_> {
@@ -90,68 +97,134 @@ impl App<'_> {
             show_key_map: false,
             key_map_scroll: 0,
             key_map_scroll_state: ScrollbarState::default(),
+            connections: Vec::new(),
+            databases: Vec::new(),
+            current_connection: None,
+            table_details_cache: HashMap::new(),
         }
     }
 
     pub async fn init(&mut self) -> Result<()> {
-        let databases = get_installed_databases()?;
+        self.connections = load_connections()?;
 
-        if databases.is_empty() {
-            println!("❌ No databases detected!");
-            return Ok(());
-        }
-
-        let selected = Select::new("🚀 Select a Database", databases.clone())
-            .with_help_message("Use ↑ ↓ arrows, Enter to select")
-            .prompt();
-
-        if let Ok(db_name) = selected {
-            if let Some(db_type) = Self::map_db_name_to_type(&db_name) {
-                self.setup_and_run_app(db_type, db_name.clone()).await?;
+        if self.connections.is_empty() {
+            println!("No saved connections found.");
+            let confirm_create = Confirm::new("Would you like to create a new connection?")
+                .with_default(true)
+                .prompt()?;
+            if confirm_create {
+                self.create_new_connection().await?;
             } else {
-                println!("❌ Unsupported database.");
+                println!("\n👋 Bye");
             }
         } else {
-            println!("\n👋 Bye");
+            self.select_connection().await?;
         }
 
         Ok(())
     }
 
-    fn map_db_name_to_type(name: &str) -> Option<DatabaseType> {
-        match name.to_lowercase().as_str() {
-            "postgresql" => Some(DatabaseType::PostgreSQL),
-            "mysql" => Some(DatabaseType::MySQL),
-            "sqlite" => Some(DatabaseType::SQLite),
-            _ => None,
+    async fn create_new_connection(&mut self) -> Result<()> {
+        let db_type = Select::new(
+            "Select database type:",
+            vec![
+                DatabaseType::PostgreSQL,
+                DatabaseType::MySQL,
+                DatabaseType::SQLite,
+            ],
+        )
+        .prompt()?;
+
+        let name = Text::new("Connection Name:").prompt()?;
+        let host = Text::new("Host:").prompt()?;
+        let user = Text::new("User:").prompt()?;
+        let password = Password::new("Password:").prompt()?;
+        let save_password = Confirm::new("Save password?")
+            .with_default(false)
+            .prompt()?;
+
+        let new_connection = Connection {
+            name,
+            host,
+            user,
+            password: if save_password { Some(password) } else { None },
+            db_type,
+        };
+
+        self.connections.push(new_connection.clone());
+        save_connections(&self.connections)?;
+        self.current_connection = Some(new_connection.clone());
+
+        self.setup_and_run_app(new_connection).await?;
+        Ok(())
+    }
+
+    async fn select_connection(&mut self) -> Result<()> {
+        let mut options = self
+            .connections
+            .iter()
+            .map(|c| c.name.clone())
+            .collect::<Vec<_>>() as Vec<String>;
+        options.push("Create new connection".to_string());
+
+        let selected = Select::new("Select a connection:", options).prompt()?;
+
+        if selected == "Create new connection" {
+            self.create_new_connection().await?;
+        } else {
+            let mut connection = self
+                .connections
+                .iter()
+                .find(|c| c.name == selected)
+                .cloned()
+                .unwrap();
+
+            if connection.password.is_none() {
+                connection.password = Some(Password::new("Password:").prompt()?);
+            }
+            self.current_connection = Some(connection.clone());
+            self.setup_and_run_app(connection).await?;
         }
+        Ok(())
     }
 
     fn current_query(&self) -> String {
         self.query_editor.textarea_content()
     }
 
-    async fn setup_and_run_app(&mut self, db_type: DatabaseType, _db_name: String) -> Result<()> {
-        let details: ConnectionDetails = get_connection_details(db_type)?;
-        self.connection_name = details.database.clone();
+    async fn setup_and_run_app(&mut self, connection: Connection) -> Result<()> {
+        let details = ConnectionDetails {
+            host: Some(connection.host.clone()),
+            user: Some(connection.user.clone()),
+            password: connection.password.clone(),
+            database: None,
+        };
+        self.connection_name = Some(connection.name.clone());
         load_history().await?;
         self.data_table.query_history = get_history(self.connection_name.clone()).await;
-        let pool = pool(db_type, &details).await?;
-
+        let pool = pool(connection.db_type, &details, None).await?;
         self.pool = Some(pool.clone());
 
         let (spinner_handle, loading) = self.loading().await;
-        let metadata = fetch_all_table_metadata(&pool).await?;
+        let databases = fetch_databases(&pool).await?;
+        let mut db_vec = Vec::new();
+        for db_name in &databases {
+            db_vec.push(Database {
+                name: db_name.clone(),
+                tables: vec![],
+            });
+        }
+        self.databases = db_vec;
         loading.store(false, Ordering::SeqCst);
         spinner_handle.await.unwrap();
 
-        if metadata.is_empty() {
-            println!("❌ No tables found in the database.");
+        if self.databases.is_empty() {
+            println!("❌ No databases found on the server.");
             return Ok(());
         }
 
-        println!("✅ Found {} tables", metadata.len());
-        let items = metadata_to_tree_items(&metadata);
+        println!("✅ Found {} databases", self.databases.len());
+        let items = metadata_to_tree_items(&self.databases);
         self.setup_ui(items).await?;
 
         stdout().execute(EnableMouseCapture)?;
@@ -177,7 +250,7 @@ impl App<'_> {
                     cursor::MoveToColumn(0),
                     Clear(ClearType::CurrentLine),
                     Print(format!(
-                        "🔄 Fetching tables... {}",
+                        "🔄 Fetching databases... {}",
                         spinner[i % spinner.len()]
                     )),
                 )
@@ -200,7 +273,7 @@ impl App<'_> {
     async fn setup_ui(&mut self, sidebar_items: Vec<TreeItem<'static, String>>) -> Result<()> {
         self.focus = Focus::Sidebar;
         self.sidebar.update_items(sidebar_items);
-        self.sidebar.update_focus(Focus::Sidebar);
+        self.sidebar.update_focus(self.focus.clone());
 
         Ok(())
     }
@@ -348,7 +421,11 @@ impl App<'_> {
             }
             Command::DataTableRunSelectedHistoryQuery => {
                 if let Some(query) = self.data_table.get_selected_history_query() {
-                    self.query_editor.set_textarea_content(query);
+                    self.query_editor.set_textarea_content(
+                        query,
+                        &self.focus,
+                        self.connection_name.clone(),
+                    );
                     self.execute_current_query(terminal).await?;
                 }
             }
@@ -358,8 +435,67 @@ impl App<'_> {
                 }
             }
 
-            Command::SidebarToggleSelected
-            | Command::SidebarKeyLeft
+            Command::SidebarToggleSelected => {
+                if let Some(identifier) = self.sidebar.handle_command(command) {
+                    if identifier.starts_with("db_") {
+                        let db_name = identifier.strip_prefix("db_").unwrap().to_string();
+                        if let Some(db) = self.databases.iter_mut().find(|db| db.name == db_name) {
+                            if db.tables.is_empty() {
+                                // Only fetch if not already fetched
+                                if let Some(connection) = &self.current_connection {
+                                    let details = ConnectionDetails {
+                                        host: Some(connection.host.clone()),
+                                        user: Some(connection.user.clone()),
+                                        password: connection.password.clone(),
+                                        database: Some(db_name.clone()),
+                                    };
+                                    let pool =
+                                        pool(connection.db_type, &details, Some(&db_name)).await?;
+                                    self.pool = Some(pool.clone());
+                                    let tables = fetch_tables(&pool).await?;
+                                    db.tables = tables;
+                                    let items = metadata_to_tree_items(&self.databases);
+                                    self.sidebar.update_items(items);
+                                }
+                            }
+                        }
+                    } else if identifier.starts_with("tbl_") {
+                        let parts: Vec<&str> = identifier.split('_').collect();
+                        let db_name = parts[1].to_string();
+                        let table_name = parts[2].to_string();
+
+                        let cache_key = format!("{}/{}", db_name, table_name);
+
+                        if let Some(metadata) = self.table_details_cache.get(&cache_key) {
+                            if let Some(db) =
+                                self.databases.iter_mut().find(|db| db.name == db_name)
+                            {
+                                if let Some(table) =
+                                    db.tables.iter_mut().find(|t| t.name == table_name)
+                                {
+                                    table.metadata = Some(metadata.clone());
+                                }
+                            }
+                        } else if let Some(pool) = &self.pool {
+                            let metadata = fetch_table_details(pool, &table_name).await?;
+                            self.table_details_cache.insert(cache_key, metadata.clone());
+                            if let Some(db) =
+                                self.databases.iter_mut().find(|db| db.name == db_name)
+                            {
+                                if let Some(table) =
+                                    db.tables.iter_mut().find(|t| t.name == table_name)
+                                {
+                                    table.metadata = Some(metadata);
+                                }
+                            }
+                        }
+                        let items = metadata_to_tree_items(&self.databases);
+                        self.sidebar.update_items(items);
+                    }
+                }
+            }
+
+            Command::SidebarKeyLeft
             | Command::SidebarKeyRight
             | Command::SidebarKeyDown
             | Command::SidebarKeyUp
@@ -414,8 +550,12 @@ impl App<'_> {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(top_chunks[1]);
 
-        self.query_editor
-            .draw(f, right_chunks[0], self.focus.clone());
+        self.query_editor.draw(
+            f,
+            right_chunks[0],
+            self.focus.clone(),
+            self.connection_name.clone(),
+        );
 
         self.data_table
             .draw(f, right_chunks[1], &self.focus.clone());

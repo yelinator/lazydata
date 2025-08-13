@@ -22,20 +22,37 @@ impl DbPool {
 pub async fn pool(
     db_type: DatabaseType,
     details: &ConnectionDetails,
+    db_name: Option<&str>,
 ) -> Result<DbPool, sqlx::Error> {
-    let conn_str = &details.connection_string();
+    let conn_str = match db_type {
+        DatabaseType::PostgreSQL => format!(
+            "postgres://{}:{}@{}/{}",
+            details.user.as_deref().unwrap_or(""),
+            details.password.as_deref().unwrap_or(""),
+            details.host.as_deref().unwrap_or("localhost"),
+            db_name.unwrap_or("postgres")
+        ),
+        DatabaseType::MySQL => format!(
+            "mysql://{}:{}@{}/{}",
+            details.user.as_deref().unwrap_or(""),
+            details.password.as_deref().unwrap_or(""),
+            details.host.as_deref().unwrap_or("localhost"),
+            db_name.unwrap_or("")
+        ),
+        DatabaseType::SQLite => format!("sqlite://{}", details.host.as_deref().unwrap_or("")),
+    };
 
     let pool = match db_type {
         DatabaseType::PostgreSQL => {
-            let pool = PgPool::connect(conn_str).await?;
+            let pool = PgPool::connect(&conn_str).await?;
             DbPool::Postgres(pool)
         }
         DatabaseType::MySQL => {
-            let pool = MySqlPool::connect(conn_str).await?;
+            let pool = MySqlPool::connect(&conn_str).await?;
             DbPool::MySQL(pool)
         }
         DatabaseType::SQLite => {
-            let pool = SqlitePool::connect(conn_str).await?;
+            let pool = SqlitePool::connect(&conn_str).await?;
             DbPool::SQLite(pool)
         }
     };

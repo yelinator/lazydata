@@ -23,16 +23,18 @@ impl SideBar {
         }
     }
 
-    pub fn handle_command(&mut self, command: Command) {
+    pub fn handle_command(&mut self, command: Command) -> Option<String> {
         match command {
             Command::SidebarToggleSelected => {
                 self.state.toggle_selected();
+                return self.state.selected().first().cloned();
             }
             Command::SidebarKeyLeft => {
                 self.state.key_left();
             }
             Command::SidebarKeyRight => {
                 self.state.key_right();
+                return self.state.selected().first().cloned();
             }
             Command::SidebarKeyDown => {
                 self.state.key_down();
@@ -57,6 +59,7 @@ impl SideBar {
             }
             _ => {}
         }
+        None
     }
 
     pub fn update_focus(&mut self, new_focus: Focus) {
@@ -75,7 +78,7 @@ impl SideBar {
             .expect("tree item IDs must be unique")
             .block(
                 Block::bordered()
-                    .title("Tables")
+                    .title("Databases")
                     .borders(Borders::ALL)
                     .border_style(style.border_style(Focus::Sidebar))
                     .style(style.block_style()),

@@ -19,7 +19,7 @@ pub enum Mode {
 }
 
 impl Mode {
-    fn block<'a>(&self, current_focus: &Focus) -> Block<'a> {
+    fn block<'a>(&self, current_focus: &Focus, connection_name: Option<String>) -> Block<'a> {
         let style = DefaultStyle {
             focus: current_focus.clone(),
         };
@@ -29,7 +29,12 @@ impl Mode {
             Self::Visual => "type y to yank, type d to delete, type Esc to back to normal mode",
             Self::Operator(_) => "move cursor to apply operator",
         };
-        let title = format!("{} MODE ({})", self, help);
+        let title = format!(
+            "{} MODE ({}) - {}",
+            self,
+            help,
+            connection_name.unwrap_or("no connection".to_string())
+        );
         Block::default()
             .borders(Borders::ALL)
             .title(title)
@@ -67,7 +72,11 @@ pub struct QueryEditor {
 impl QueryEditor {
     pub fn new() -> Self {
         let mut textarea = TextArea::default();
-        textarea.set_block(Block::default().borders(Borders::ALL).title("SQL Editor"));
+        textarea.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Write query for the selected database"),
+        );
         Self {
             mode: Mode::Normal,
             textarea,
@@ -143,14 +152,27 @@ impl QueryEditor {
         self.textarea.lines().join("\n")
     }
 
-    pub fn set_textarea_content(&mut self, content: String) {
+    pub fn set_textarea_content(
+        &mut self,
+        content: String,
+        current_focus: &Focus,
+        connection_name: Option<String>,
+    ) {
         self.textarea = TextArea::from(content.lines().map(String::from).collect::<Vec<String>>());
-        self.textarea.set_block(self.mode.block(&Focus::Editor));
+        self.textarea
+            .set_block(self.mode.block(current_focus, connection_name));
         self.textarea.set_cursor_style(self.mode.cursor_style());
     }
 
-    pub fn draw(&mut self, frame: &mut Frame, area: Rect, current_focus: Focus) {
-        self.textarea.set_block(self.mode.block(&current_focus));
+    pub fn draw(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        current_focus: Focus,
+        connection_name: Option<String>,
+    ) {
+        self.textarea
+            .set_block(self.mode.block(&current_focus, connection_name));
         self.textarea.set_cursor_style(self.mode.cursor_style());
         frame.render_widget(&self.textarea, area);
     }
