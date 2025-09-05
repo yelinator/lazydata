@@ -202,11 +202,11 @@ impl App<'_> {
         self.connection_name = Some(connection.name.clone());
         load_history().await?;
         self.data_table.query_history = get_history(self.connection_name.clone()).await;
-        let pool = pool(connection.db_type, &details, None).await?;
-        self.pool = Some(pool.clone());
+        let pool_instance = pool(connection.db_type, &details, None).await?;
+        self.pool = Some(pool_instance.clone());
 
         let (spinner_handle, loading) = self.loading().await;
-        let databases = fetch_databases(&pool).await?;
+        let databases = fetch_databases(&pool_instance).await?;
         let mut db_vec = Vec::new();
         for db_name in &databases {
             db_vec.push(Database {
@@ -292,8 +292,8 @@ impl App<'_> {
     }
 
     async fn handle_events(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key_event) = event::read()? {
+        if event::poll(Duration::from_millis(100))?
+            && let Event::Key(key_event) = event::read()? {
                 let command = if self.show_key_map {
                     self.key_mapper.map_popup_key(key_event)
                 } else {
@@ -309,7 +309,6 @@ impl App<'_> {
                     self.query_editor.mode = self.key_mapper.editor_mode();
                 }
             }
-        }
         Ok(())
     }
 
@@ -439,8 +438,8 @@ impl App<'_> {
                 if let Some(identifier) = self.sidebar.handle_command(command) {
                     if identifier.starts_with("db_") {
                         let db_name = identifier.strip_prefix("db_").unwrap().to_string();
-                        if let Some(db) = self.databases.iter_mut().find(|db| db.name == db_name) {
-                            if db.tables.is_empty() {
+                        if let Some(db) = self.databases.iter_mut().find(|db| db.name == db_name)
+                            && db.tables.is_empty() {
                                 // Only fetch if not already fetched
                                 if let Some(connection) = &self.current_connection {
                                     let details = ConnectionDetails {
@@ -458,7 +457,6 @@ impl App<'_> {
                                     self.sidebar.update_items(items);
                                 }
                             }
-                        }
                     } else if identifier.starts_with("tbl_") {
                         let parts: Vec<&str> = identifier.split('_').collect();
                         let db_name = parts[1].to_string();
@@ -469,25 +467,21 @@ impl App<'_> {
                         if let Some(metadata) = self.table_details_cache.get(&cache_key) {
                             if let Some(db) =
                                 self.databases.iter_mut().find(|db| db.name == db_name)
-                            {
-                                if let Some(table) =
+                                && let Some(table) =
                                     db.tables.iter_mut().find(|t| t.name == table_name)
                                 {
                                     table.metadata = Some(metadata.clone());
                                 }
-                            }
                         } else if let Some(pool) = &self.pool {
                             let metadata = fetch_table_details(pool, &table_name).await?;
                             self.table_details_cache.insert(cache_key, metadata.clone());
                             if let Some(db) =
                                 self.databases.iter_mut().find(|db| db.name == db_name)
-                            {
-                                if let Some(table) =
+                                && let Some(table) =
                                     db.tables.iter_mut().find(|t| t.name == table_name)
                                 {
                                     table.metadata = Some(metadata);
                                 }
-                            }
                         }
                         let items = metadata_to_tree_items(&self.databases);
                         self.sidebar.update_items(items);

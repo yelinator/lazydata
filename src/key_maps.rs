@@ -42,8 +42,8 @@ impl DefaultKeyMapper {
             {
                 return Some(Command::EditorMoveCursor(CursorMove::Top));
             }
-            if let Key::Char(op @ ('y' | 'd' | 'c')) = pending.key {
-                if input.key == Key::Char(op) {
+            if let Key::Char(op @ ('y' | 'd' | 'c')) = pending.key
+                && input.key == Key::Char(op) {
                     return match op {
                         'y' => Some(Command::EditorCopySelection),
                         'd' => Some(Command::EditorDeleteLineByEnd),
@@ -51,7 +51,6 @@ impl DefaultKeyMapper {
                         _ => None,
                     };
                 }
-            }
 
             let command_from_pending = match pending.key {
                 Key::Char(op @ ('y' | 'd' | 'c')) => {
