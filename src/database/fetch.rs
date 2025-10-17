@@ -395,40 +395,8 @@ pub fn metadata_to_tree_items(databases: &[Database]) -> Vec<TreeItem<'static, S
                     .map(|table| {
                         let table_id = format!("tbl_{}_{}", &db.name, &table.name);
                         if let Some(metadata) = &table.metadata {
-                            let columns_node = {
-                                let column_nodes = metadata
-                                    .columns
-                                    .iter()
-                                    .map(|column| {
-                                        let column_id = format!("{}_col_{}", table_id, column.name);
-                                        let sub_children = vec![
-                                            TreeItem::new_leaf(
-                                                format!("{}_columns", column_id),
-                                                "Columns",
-                                            ),
-                                            TreeItem::new_leaf(
-                                                format!("{}_constraints", column_id),
-                                                "Constraints",
-                                            ),
-                                            TreeItem::new_leaf(
-                                                format!("{}_other", column_id),
-                                                "Other",
-                                            ),
-                                        ];
-                                        TreeItem::new(column_id, column.to_string(), sub_children)
-                                            .unwrap()
-                                    })
-                                    .collect::<Vec<_>>();
-                                TreeItem::new(
-                                    format!("{}_columns", table_id),
-                                    "Columns",
-                                    column_nodes,
-                                )
-                                .unwrap()
-                            };
-
                             let children = vec![
-                                columns_node,
+                                build_category_node(&table_id, "Columns", &metadata.columns),
                                 build_category_node(
                                     &table_id,
                                     "Constraints",
@@ -459,7 +427,12 @@ pub fn metadata_to_tree_items(databases: &[Database]) -> Vec<TreeItem<'static, S
                         }
                     })
                     .collect::<Vec<_>>();
-                TreeItem::new(format!("{}_tables", db_id), "Tables", table_nodes).unwrap()
+                TreeItem::new(
+                    format!("{}_tables", db_id),
+                    format!("Tables ({})", db.tables.len()),
+                    table_nodes,
+                )
+                .unwrap()
             };
             TreeItem::new(db_id, db.name.clone(), vec![tables_node]).unwrap()
         })
